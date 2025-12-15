@@ -1,0 +1,15 @@
+[package]
+name = "macros"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+proc-macro = true
+
+[features]
+client = ["macros_impl/client"]
+
+[dependencies]
+macros_impl = { path = "../macros_impl" }
+syn = "2.0.111"
+quote = "1.0.42"

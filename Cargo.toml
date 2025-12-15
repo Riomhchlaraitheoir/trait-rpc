@@ -1,0 +1,36 @@
+[workspace]
+members = ["macros", "macros_impl"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[package]
+name = "trait-link"
+version.workspace = true
+edition.workspace = true
+
+[features]
+axum = ["dep:axum", "tower"]
+client = ["macros/client"]
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+reqwest = { version = "0.12.24", features = ["json"], optional = true }
+thiserror = "2.0.17"
+axum = { version = "0.8.7", optional = true, features = ["macros"]}
+tower = { version = "0.5.2", optional = true }
+macros = { path = "macros" }
+
+[dev-dependencies]
+chrono = { version = "0.4.42", features = ["serde"] }
+tokio = { version = "1.48.0", features = ["full"] }
+
+[[example]]
+name = "todo_client"
+required-features = ["reqwest", "client"]
+
+[[example]]
+name = "todo_server"
+required-features = ["axum"]
