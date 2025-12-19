@@ -31,9 +31,9 @@ enum TodoServerResponse {
     NewTodo(())
 }
 
-struct TodoServerRpcServer<T>(T);
+struct TodoServerServer<T>(T);
 
-impl<T: TodoServer + Sync> Rpc for TodoServerRpcServer<T> {
+impl<T: TodoServer + Sync> Rpc for TodoServerServer<T> {
     type Request = TodoServerRequest;
     type Response = TodoServerResponse;
 
@@ -73,11 +73,11 @@ impl TodoServer for Todos {
 
 #[tokio::main]
 async fn main() {
-    let state = Arc::new(TodoServerRpcServer(Todos {
+    let state = Arc::new(TodoServerServer(Todos {
         todos: Default::default(),
     }));
     let app = axum::Router::new()
-        .route("/api/todo", post(trait_link::server::serve::<TodoServerRpcServer<Todos>>))
+        .route("/api/todo", post(trait_link::server::serve::<TodoServerServer<Todos>>))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();
     axum::serve::serve(listener, app).await.unwrap()

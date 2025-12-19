@@ -22,15 +22,15 @@ enum TodoServerResponse {
     NewTodo(())
 }
 
-struct TodoServerRpcServer<T: TodoServer>(T);
+struct TodoServerServer<T: TodoServer>(T);
 
-impl<T: TodoServer> TodoServerRpcServer<T> {
+impl<T: TodoServer> TodoServerServer<T> {
     fn new(server: T) -> Self {
         Self(server)
     }
 }
 
-impl<T: TodoServer + Sync> ::trait_link::Rpc for TodoServerRpcServer<T> {
+impl<T: TodoServer + Sync> ::trait_link::Rpc for TodoServerServer<T> {
     type Request = TodoServerRequest;
     type Response = TodoServerResponse;
 

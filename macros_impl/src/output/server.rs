@@ -7,7 +7,7 @@ use crate::output::Names;
 
 impl Link {
     pub fn server_name(&self) -> Ident {
-        format_ident!("{}RpcServer", self.name)
+        format_ident!("{}Server", self.name)
     }
 
     pub fn server(&self, names: &Names) -> Vec<Item> {
