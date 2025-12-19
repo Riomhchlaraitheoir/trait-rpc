@@ -1,6 +1,5 @@
 
 trait TodoServer {
-    type Error: ::core::error::Error;
     fn get_todos(&self) -> impl ::core::future::Future<Output = Vec<Todo>> + Send;
     fn get_todo(&self, name: String) -> impl ::core::future::Future<Output = Option<Todo>> + Send;
     fn new_todo(&self, todo: Todo) -> impl ::core::future::Future<Output = ()> + Send;

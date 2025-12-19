@@ -13,6 +13,17 @@ use syn::{TraitBound, TraitBoundModifier, TypeImplTrait, TypeParamBound};
 
 impl Link {
     pub fn trait_decl(&self, names: &Names) -> ItemTrait {
+        let items =
+            self.methods
+                .iter()
+                .map(|method| method.to_trait_item(names))
+                .map(TraitItem::Fn);
+        #[cfg(feature = "client")]
+        let items = once(TraitItem::Type(parse_quote!(
+                type Error: ::core::error::Error;
+            )))
+            .chain(items);
+        let items = items.collect();
         ItemTrait {
             attrs: vec![],
             vis: self.vis.clone(),
@@ -25,16 +36,7 @@ impl Link {
             colon_token: self.colon_token,
             supertraits: self.supertraits.clone(),
             brace_token: Default::default(),
-            items: once(TraitItem::Type(parse_quote!(
-                type Error: ::core::error::Error;
-            )))
-            .chain(
-                self.methods
-                    .iter()
-                    .map(|method| method.to_trait_item(names))
-                    .map(TraitItem::Fn),
-            )
-            .collect(),
+            items,
         }
     }
 }
