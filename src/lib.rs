@@ -12,10 +12,10 @@ pub use macros::trait_link;
 
 pub trait Transport {
     type Error: std::error::Error;
-    fn send<Req, Resp>(&self, request: Req) -> impl Future<Output = Result<Resp, <Self as Transport>::Error>> + Send
+    fn send<Req, Resp>(&self, request: Req) -> impl Future<Output = Result<Resp, <Self as Transport>::Error>>
     where
-        Req: Serialize + Send,
-        Resp: DeserializeOwned + Send;
+        Req: Serialize,
+        Resp: DeserializeOwned;
 }
 
 pub trait Rpc: Sync {
