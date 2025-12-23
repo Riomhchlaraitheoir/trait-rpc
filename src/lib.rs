@@ -7,6 +7,10 @@ use thiserror::Error;
 pub mod server;
 #[cfg(feature = "reqwest")]
 pub mod reqwest;
+#[cfg(all(feature = "browser", target_arch = "wasm32"))]
+pub mod browser;
+#[cfg(all(feature = "browser", not(target_arch = "wasm32")))]
+compile_error!("browser feature is only available for wasm32 target arch");
 
 pub use macros::trait_link;
 

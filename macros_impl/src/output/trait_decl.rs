@@ -2,6 +2,7 @@ use crate::output::Names;
 use crate::{Link, Method};
 #[cfg(feature = "client")]
 use proc_macro2::{Ident, Span};
+#[cfg(feature = "client")]
 use std::iter::once;
 #[cfg(feature = "client")]
 use syn::TypePath;
