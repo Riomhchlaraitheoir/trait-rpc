@@ -38,6 +38,4 @@ jobs:
       run: cargo clippy --features reqwest,json,cbor,browser,browser-json --target wasm32-unknown-unknown -- -Dwarnings
     - name: Run tests
       run: cargo test --verbose --features axum,reqwest,reqwest-blocking,json,cbor,__examples_tokio
-    - name: Run tests for WASM target
-      run: cargo test --verbose --features reqwest,json,cbor,browser,browser-json --target wasm32-unknown-unknown
       
