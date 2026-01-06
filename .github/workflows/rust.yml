@@ -16,6 +16,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust WASM toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+          target: wasm32-unknown-unknown
     - name: Cache
       uses: actions/cache@v4
       with:
