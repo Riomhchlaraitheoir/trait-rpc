@@ -25,13 +25,13 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
     - name: Run clippy for macros
-      run: cargo clippy --package macros_impl
+      run: cargo clippy --package macros_impl -- -Dwarnings
     - name: Run tests for macros
       run: cargo test --package macros_impl
     - name: Run Clippy
-      run: cargo clippy -- --Dwarnings --features axum,reqwest,reqwest-blocking,json,cbor
+      run: cargo clippy --features axum,reqwest,reqwest-blocking,json,cbor -- -Dwarnings
     - name: Run Clippy for WASM target
-      run: cargo clippy -- --Dwarnings --features reqwest,reqwest-blocking,json,cbor,browser,browser-json --target wasm32-unknown-unknown
+      run: cargo clippy --features reqwest,reqwest-blocking,json,cbor,browser,browser-json --target wasm32-unknown-unknown -- -Dwarnings
     - name: Run tests
       run: cargo test --verbose --features axum,reqwest,reqwest-blocking,json,cbor
     - name: Run tests for WASM target
