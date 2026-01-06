@@ -1,52 +1,48 @@
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-
-use crate::{LinkError, BlockingTransport};
+use bon::bon;
+use crate::BlockingTransport;
 pub use reqwest::Error;
+use reqwest::blocking::Client;
+use reqwest::{Method};
+use crate::format::{FormatInfo};
 
 /// A AsyncClient which uses the [reqwest] crate
-pub struct AsyncClient {
-    client: reqwest::blocking::Client,
+#[derive(Debug, Clone)]
+pub struct ReqwestBlocking {
+    client: Client,
     url: String,
     method: reqwest::Method,
 }
 
-impl AsyncClient {
+#[bon]
+impl ReqwestBlocking {
     /// Create a new client using the given URL and method
-    pub fn new(url: &str, method: reqwest::Method) -> Self {
+    #[builder]
+    pub fn new(
+        /// The underlying reqwest client
+        client: Option<Client>,
+        /// The url to access the service at
+        #[builder(into)]
+        url: String,
+        /// The HTTP method to use, default is POST
+        method: Option<Method>) -> Self {
         Self {
-            client: reqwest::blocking::Client::new(),
-            url: url.to_string(),
-            method,
+            client: client.unwrap_or_default(),
+            url,
+            method: method.unwrap_or(Method::POST),
         }
     }
 }
 
-impl<Req, Resp> BlockingTransport<Req, Resp> for AsyncClient
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
+impl BlockingTransport for ReqwestBlocking {
     type Error = Error;
 
-    fn send(self, request: Req) -> Result<Resp, LinkError<Self::Error>> {
-        (&self).send(request)
-    }
-}
-
-impl<Req, Resp> BlockingTransport<Req, Resp> for &AsyncClient
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
-    type Error = Error;
-
-    fn send(self, request: Req) -> Result<Resp, LinkError<Self::Error>> {
-        Ok(self
+    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Vec<u8>, Self::Error> {
+        self
             .client
             .request(self.method.clone(), &self.url)
-            .json(&request)
+            .body(request)
+            .header(reqwest::header::CONTENT_TYPE, format_info.http_content_type)
             .send()?
-            .json()?)
+            .json()
     }
 }

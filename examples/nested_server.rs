@@ -1,14 +1,33 @@
+use axum::http::Method;
 use axum::Router;
-use axum::routing::post;
-use futures::future::{Either, ready};
-use std::collections::HashMap;
+use futures::future::{ready, Either};
 use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::ops::Deref;
-use std::sync::Arc;
 use tokio::sync::RwLock;
+use trait_link::format::{Cbor, Json};
+use trait_link::server::axum::Axum;
 use trait_link::Handler;
 
 include!("traits/nested.rs");
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route_service(
+        "/api",
+        Axum::builder()
+            .handler(ApiService::server(Api::default()))
+            .format(&Json)
+            .format(&Cbor)
+            .method(Method::POST)
+            .build(),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
+        .await
+        .unwrap();
+    axum::serve(listener, app).await.unwrap()
+}
 
 impl Password {
     // no hashing used here since this is just intended to get the example compiling, not to be an actual example of password hashing
@@ -47,31 +66,18 @@ impl User {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    let api: &'static Api = Box::leak(Box::new(Api::default()));
-    let app = Router::new()
-        .route("/api", post(trait_link::server::axum::json))
-        .with_state(Arc::new(ApiService::server(api)));
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080")
-        .await
-        .unwrap();
-    axum::serve(listener, app).await.unwrap()
-}
-
 #[derive(Default)]
 struct Api {
     users: RwLock<HashMap<u64, User>>,
     tokens: RwLock<HashMap<LoginToken, u64>>,
 }
 
-impl ApiServiceServer for &Api {
-    async fn users(self) -> impl Handler<Service = UsersService> {
+impl ApiServiceServer for Api {
+    async fn users(&self) -> impl Handler<Rpc = UsersService> {
         UsersService::server(Users(self))
     }
 
-    async fn login(self, username: String, password: String) -> Option<LoginToken> {
+    async fn login(&self, username: String, password: String) -> Option<LoginToken> {
         println!("received login request: username: {username}, password: {password}");
         let users = self.users.read().await;
         let user = users.values().find(|&user| user.username == username)?;
@@ -95,7 +101,7 @@ impl Deref for Users<'_> {
 }
 
 impl UsersServiceServer for Users<'_> {
-    async fn new(self, user: NewUser) -> User {
+    async fn new(&self, user: NewUser) -> User {
         println!("received user creation request: {user:?}");
         let mut users = self.users.write().await;
         let id = users.keys().copied().max().unwrap_or_default();
@@ -104,19 +110,19 @@ impl UsersServiceServer for Users<'_> {
         user
     }
 
-    async fn list(self) -> Vec<User> {
+    async fn list(&self) -> Vec<User> {
         println!("received user list request");
         self.users.read().await.values().cloned().collect()
     }
 
-    async fn by_id(self, user_id: u64) -> impl Handler<Service = UserService> {
+    async fn by_id(&self, user_id: u64) -> impl Handler<Rpc = UserService> {
         UserService::server(UserServer {
             api: self.0,
             user_id,
         })
     }
 
-    async fn current(self, token: LoginToken) -> impl Handler<Service = UserService> {
+    async fn current(&self, token: LoginToken) -> impl Handler<Rpc = UserService> {
         UserService::server(
             self.tokens
                 .read()
@@ -137,8 +143,8 @@ struct UserServer<'a> {
 }
 
 impl UserServiceServer for UserServer<'_> {
-    async fn get(self) -> Result<User, UserNotFound> {
-        let Self { api, user_id } = self;
+    async fn get(&self) -> Result<User, UserNotFound> {
+        let Self { api, user_id } = *self;
         println!("received user get request, id: {user_id}");
         api.users
             .read()
@@ -148,8 +154,8 @@ impl UserServiceServer for UserServer<'_> {
             .ok_or(UserNotFound)
     }
 
-    async fn update(self, user: UserUpdate) -> Result<User, UserNotFound> {
-        let Self { api, user_id } = self;
+    async fn update(&self, user: UserUpdate) -> Result<User, UserNotFound> {
+        let Self { api, user_id } = *self;
         println!("received user update request, id: {user_id}, update: {user:?}");
         if let Entry::Occupied(entry) = api.users.write().await.entry(user_id) {
             let updated = entry.into_mut().update(user);
@@ -159,8 +165,8 @@ impl UserServiceServer for UserServer<'_> {
         }
     }
 
-    async fn delete(self) -> Result<User, UserNotFound> {
-        let Self { api, user_id } = self;
+    async fn delete(&self) -> Result<User, UserNotFound> {
+        let Self { api, user_id } = *self;
         println!("received user delete request, id: {user_id}");
         if let Entry::Occupied(entry) = api.users.write().await.entry(user_id) {
             let (_, user) = entry.remove_entry();
@@ -175,26 +181,26 @@ impl<S, E> UserServiceServer for Result<S, E>
 where
     Self: Send,
     S: UserServiceServer,
-    E: Into<UserNotFound>,
+    E: Into<UserNotFound> + Clone + Sync,
 {
-    fn get(self) -> impl Future<Output = Result<User, UserNotFound>> + Send {
+    fn get(&self) -> impl Future<Output = Result<User, UserNotFound>> + Send {
         match self {
             Ok(ok) => Either::Left(ok.get()),
-            Err(err) => Either::Right(ready(Err(err.into()))),
+            Err(err) => Either::Right(ready(Err(err.clone().into()))),
         }
     }
 
-    fn update(self, user: UserUpdate) -> impl Future<Output = Result<User, UserNotFound>> + Send {
+    fn update(&self, user: UserUpdate) -> impl Future<Output = Result<User, UserNotFound>> + Send {
         match self {
             Ok(ok) => Either::Left(ok.update(user)),
-            Err(err) => Either::Right(ready(Err(err.into()))),
+            Err(err) => Either::Right(ready(Err(err.clone().into()))),
         }
     }
 
-    fn delete(self) -> impl Future<Output = Result<User, UserNotFound>> + Send {
+    fn delete(&self) -> impl Future<Output = Result<User, UserNotFound>> + Send {
         match self {
             Ok(ok) => Either::Left(ok.delete()),
-            Err(err) => Either::Right(ready(Err(err.into()))),
+            Err(err) => Either::Right(ready(Err(err.clone().into()))),
         }
     }
 }

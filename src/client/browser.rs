@@ -4,7 +4,7 @@
 //! requests and parse the response body as JSON
 
 use bon::bon;
-use crate::{LinkError, AsyncTransport};
+use crate::{AsyncTransport};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use thiserror::Error;
@@ -12,17 +12,20 @@ use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::JsValue;
 use web_sys::{Request, RequestInit, RequestMode, Response, Window};
+use web_sys::js_sys::{Uint8Array};
+use crate::format::FormatInfo;
 
 /// A client which uses the browsers Fetch API along with JSON format (via serde),
 /// only supported on wasm32 architecture
-pub struct AsyncClient {
+#[derive(Debug, Clone)]
+pub struct Browser {
     url: String,
     window: Window,
     request_options: RequestInit,
 }
 
 #[bon]
-impl AsyncClient {
+impl Browser {
     /// Create a new client
     #[builder]
     pub fn new(
@@ -49,56 +52,28 @@ impl AsyncClient {
     }
 }
 
-impl<Req, Resp> AsyncTransport<Req, Resp> for AsyncClient
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
+impl AsyncTransport for Browser {
     type Error = Error;
 
-    async fn send(self, request: Req) -> Result<Resp, LinkError<Self::Error>> {
-        #[allow(clippy::needless_borrow, reason = "borrow is need to prevent recursion")]
-        Ok((&self).send(request).await?)
-    }
-}
-
-impl<Req, Resp> AsyncTransport<Req, Resp> for &AsyncClient
-where
-    Req: Serialize,
-    Resp: DeserializeOwned,
-{
-    type Error = Error;
-
-    async fn send(self, request: Req) -> Result<Resp, LinkError<Self::Error>> {
-        Ok(self.send(request).await?)
-    }
-}
-
-impl AsyncClient {
-    async fn send<Req, Resp>(&self, request: Req) -> Result<Resp, Error>
-    where
-        Req: Serialize,
-        Resp: DeserializeOwned,
-    {
-        let body = serde_json::to_string(&request).map_err(Error::Serialise)?;
+    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Vec<u8>, Self::Error> {
         let opts = self.request_options.clone();
-        opts.set_body(&JsValue::from_str(&body));
+        let body = Uint8Array::from(request.as_slice());
+        opts.set_body(&body);
 
         let request =
             Request::new_with_str_and_init(&self.url, &opts).map_err(Error::NewRequest)?;
         request
             .headers()
-            .set("Content-Type", "application/json")
+            .set("Content-Type", format_info.http_content_type)
             .map_err(Error::SetHeader)?;
 
         let promise = self.window.fetch_with_request(&request);
         let future = JsFuture::from(promise);
         let response = future.await.map_err(Error::Fetch)?;
         let response: Response = response.dyn_into().map_err(Error::CastResponse)?;
-        let body = response.json().map_err(Error::ParseJson)?;
-        let body = JsFuture::from(body).await.map_err(Error::ParseJson)?;
-        let response = serde_wasm_bindgen::from_value(body)?;
-        Ok(response)
+        let body = response.array_buffer().map_err(Error::ReadBody)?;
+        let body = JsFuture::from(body).await.map_err(Error::ReadBody)?;
+        Ok(Uint8Array::new(&body).to_vec())
     }
 }
 
@@ -120,9 +95,9 @@ pub enum Error {
     /// The response could not be cast to the expected type
     #[error("Response value is unexpected type: {0:?}")]
     CastResponse(JsValue),
-    /// An error occurred while parsing JSON
-    #[error("Failed to parse Json body to javascript object: {0:?}")]
-    ParseJson(JsValue),
+    /// Failed to read binary body
+    #[error("Failed to read binary body: {0}")]
+    ReadBody(JsValue),
     /// An error occurred while deserialising parsed JSON
     #[error("Deserialization from javascript object failed: {0}")]
     Deserialize(#[from] serde_wasm_bindgen::Error),

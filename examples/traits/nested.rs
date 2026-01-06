@@ -71,3 +71,6 @@ pub trait UserService {
     fn update(&self, user: UserUpdate) -> Result<User, UserNotFound>;
     fn delete(&self) -> Result<User, UserNotFound>;
 }
+
+// include expanded form here for debugging:
+// include!("../../macros_impl/src/tests/outputs/nested.rs");

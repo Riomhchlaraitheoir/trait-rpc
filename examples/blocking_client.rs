@@ -1,12 +1,23 @@
 use axum::http::Method;
-use trait_link::client::reqwest_blocking::AsyncClient;
+use trait_link::client::reqwest_blocking::ReqwestBlocking;
 use trait_link::*;
+use trait_link::format::Json;
 
 include!("traits/todo.rs");
 
 fn main() {
-    let client = AsyncClient::new("http://localhost:8080/api/todo", Method::POST);
-    let client = TodoService::blocking_client(&client);
+    let client = TodoService::blocking_client(
+        client::builder()
+            .blocking()
+            .transport(
+                ReqwestBlocking::builder()
+                    .url("http://localhost:8080/api/todo")
+                    .method(Method::POST)
+                    .build()
+            )
+            .format(Json)
+            .build()
+    );
     for todo in client.get_todos().expect("get_todos failed") {
         println!("{todo:?}")
     }

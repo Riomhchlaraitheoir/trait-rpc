@@ -1,13 +1,22 @@
-use axum::http::Method;
-use trait_link::client::reqwest::AsyncClient;
+use trait_link::client::reqwest::Reqwest;
 use trait_link::*;
+use trait_link::format::Json;
 
 include!("traits/todo.rs");
 
 #[tokio::main]
 async fn main() {
-    let client = AsyncClient::new("http://localhost:8080/api/todo", Method::POST);
-    let client = TodoService::async_client(&client);
+    let client = TodoService::async_client(
+        client::builder()
+            .non_blocking()
+            .transport(
+                Reqwest::builder()
+                    .url("http://localhost:8080/api/todo")
+                    .build()
+            )
+            .format(Json)
+            .build()
+    );
     for todo in client.get_todos().await.expect("get_todos failed") {
         println!("{todo:?}")
     }
