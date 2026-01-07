@@ -1,4 +1,6 @@
-use crate::format::{Cbor, DynFormat, Format, Json};
+use crate::format::{DynFormat, Format};
+#[allow(unused_imports, reason = "only used if certain features are enabled")]
+use crate::format;
 use crate::{Handler, Rpc};
 use axum::body::Bytes;
 use axum::extract::{FromRequest, Request};
@@ -71,18 +73,18 @@ where
     #[cfg(feature = "json")]
     pub fn allow_json(self) -> Self
     where
-        Json: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
+        format::Json: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
     {
-        self.format(&Json)
+        self.format(&format::Json)
     }
 
     /// Add CBOR support to this server
     #[cfg(feature = "cbor")]
     pub fn allow_cbor(self) -> Self
     where
-        Cbor: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
+        format::Cbor: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
     {
-        self.format(&Cbor)
+        self.format(&format::Cbor)
     }
 
     /// Allow POST requests

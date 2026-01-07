@@ -23,11 +23,11 @@ nursery = { level = "warn", priority = -1 }
 
 [features]
 axum = ["dep:axum", "tower"]
-browser = ["web-sys", "wasm-bindgen-futures", "wasm-streams"]
+browser = ["web-sys", "wasm-bindgen-futures"]
 reqwest-blocking = ["dep:reqwest", "reqwest/blocking"]
 reqwest = ["dep:reqwest"]
 json = ["serde_json"]
-browser-json = ["serde-wasm-bindgen"]
+browser-json = ["serde-wasm-bindgen", "web-sys", "wasm-bindgen-futures"]
 cbor = ["ciborium"]
 __examples_tokio = ["dep:tokio"]
 
@@ -48,7 +48,6 @@ ciborium = { version = "0.2.2", optional = true }
 # WASM dependencies
 wasm-bindgen-futures = { version = "0.4", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
-wasm-streams = { version = "0.4.2", optional = true }
 
 [dependencies.web-sys]
 version = "0.3"

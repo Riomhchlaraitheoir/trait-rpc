@@ -78,9 +78,6 @@ impl AsyncTransport for Browser {
 /// This represents the various errors which can occur when using the Fetch API
 #[derive(Debug, Error)]
 pub enum Error {
-    /// An error occurred while serialising the request
-    #[error("Failed to serialise request body: {0}")]
-    Serialise(serde_json::Error),
     /// An error occurred while build the request
     #[error("Failed to create new request: {0:?}")]
     NewRequest(JsValue),
@@ -96,7 +93,4 @@ pub enum Error {
     /// Failed to read binary body
     #[error("Failed to read binary body: {0:?}")]
     ReadBody(JsValue),
-    /// An error occurred while deserialising parsed JSON
-    #[error("Deserialization from javascript object failed: {0}")]
-    Deserialize(#[from] serde_wasm_bindgen::Error),
 }
