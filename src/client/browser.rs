@@ -3,16 +3,14 @@
 //! This provides a transport implementation which uses the Browser's Fetch API to send http
 //! requests and parse the response body as JSON
 
-use std::ops::Deref;
 use bon::bon;
 use crate::{AsyncTransport};
 use thiserror::Error;
 use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_futures::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::JsValue;
-use web_sys::{Headers, Request, RequestInit, RequestMode, Response, Window};
+use web_sys::{Request, RequestInit, RequestMode, Response, Window};
 use web_sys::js_sys::{Uint8Array};
-use log::debug;
 use crate::client::ResponseError;
 use crate::format::FormatInfo;
 
@@ -56,30 +54,17 @@ impl Browser {
 impl AsyncTransport for Browser {
     type Error = Error;
 
-    #[allow(clippy::explicit_deref_methods)] // debugging
     async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
         let opts = self.request_options.clone();
         let body = Uint8Array::from(request.as_slice());
         opts.set_body(&body);
-        let headers = {
-            let headers = Headers::new()
-                .map_err(Error::SetHeader)?;
-            debug!("Building HTTP headers: {headers:?}");
-            headers.set("Content-Type", format_info.http_content_type)
-                .map_err(Error::SetHeader)?;
-            debug!("Built HTTP headers: Content-Type: {}", headers.get("Content-Type").unwrap().unwrap());
 
-            headers
-        };
-        let headers_object = headers.deref();
-        debug!("headers object: {headers_object:?}");
-        let headers_value = headers_object.deref();
-        debug!("headers value: {headers_value:?}");
-        opts.set_headers(headers_value);
-
-        debug!("creating request, options: {opts:?}");
         let request =
             Request::new_with_str_and_init(&self.url, &opts).map_err(Error::NewRequest)?;
+        request
+            .headers()
+            .set("Content-Type", format_info.http_content_type)
+            .map_err(Error::SetHeader)?;
 
         let promise = self.window.fetch_with_request(&request);
         let future = JsFuture::from(promise);
@@ -88,24 +73,12 @@ impl AsyncTransport for Browser {
         let body = response.array_buffer().map_err(Error::ReadBody)?;
         let body = JsFuture::from(body).await.map_err(Error::ReadBody)?;
         let body = Uint8Array::new(&body).to_vec();
-        Ok(match response.status() {
-            200..=299 => {
-                debug!("response: success");
-                Ok(body)
-            },
-            400..=499 => {
-                debug!("response: request rejected");
-                Err(ResponseError::BadRequest(String::from_utf8(body).unwrap()))
-            }
-            500..=599 => {
-                debug!("response: server error");
-                Err(ResponseError::InternalServerError(String::from_utf8(body).unwrap()))
-            }
-            _ => {
-                debug!("response: unexpected response");
-                Err(ResponseError::Unexpected)
-            }
-        })
+        match response.status() {
+            200..=299 => Ok(Ok(body)),
+            400..=499 => Ok(Err(ResponseError::BadRequest(String::from_utf8(body).unwrap()))),
+            500..=599 => Ok(Err(ResponseError::InternalServerError(String::from_utf8(body).unwrap()))),
+            _ => Ok(Err(ResponseError::Unexpected))
+        }
     }
 }
 

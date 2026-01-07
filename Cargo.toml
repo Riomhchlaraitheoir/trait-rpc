@@ -48,7 +48,6 @@ ciborium = { version = "0.2.2", optional = true }
 # WASM dependencies
 wasm-bindgen-futures = { version = "0.4", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
-log = "0.4.29"
 
 [dependencies.web-sys]
 version = "0.3"
