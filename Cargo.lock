@@ -1481,6 +1481,7 @@ dependencies = [
  "bon",
  "ciborium",
  "futures",
+ "log",
  "reqwest",
  "serde",
  "serde-wasm-bindgen",
