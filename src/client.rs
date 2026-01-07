@@ -120,7 +120,7 @@ where
     async fn send(&self, request: Req) -> Result<Resp, Self::Error> {
         let mut buffer = Vec::new();
         self.format.write(request, &mut buffer).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(buffer, F::INFO).await.map_err(RpcError::Transport)?;
+        let response = self.transport.send(buffer, F::INFO).await.map_err(RpcError::Transport)??;
         let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
         Ok(response)
     }
@@ -136,7 +136,7 @@ where
     fn send(&self, request: Req) -> Result<Resp, Self::Error> {
         let mut buffer = Vec::new();
         self.format.write(request, &mut buffer).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(buffer, F::INFO).map_err(RpcError::Transport)?;
+        let response = self.transport.send(buffer, F::INFO).map_err(RpcError::Transport)??;
         let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
         Ok(response)
     }
@@ -155,7 +155,7 @@ pub trait AsyncTransport: Clone {
     /// This is the error type which is returned in the case that some part of the transport failed
     type Error: Error + 'static;
     /// Sends the request and returns the response
-    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> impl Future<Output=Result<Vec<u8>, Self::Error>>;
+    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> impl Future<Output=Result<Result<Vec<u8>, ResponseError>, Self::Error>>;
 }
 
 /// This trait describes the transport layer of a client,
@@ -178,7 +178,7 @@ pub trait BlockingTransport: Clone {
     ///
     /// # Errors
     /// Returns an error in the case that the communication failed for any reason
-    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Vec<u8>, Self::Error>;
+    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error>;
 }
 
 /// This is a transport layer used for nesting services
@@ -268,6 +268,9 @@ pub enum RpcError<Ser, De, T> {
     /// The transport layer returned an error
     #[error("Failed to send request: {0}")]
     Transport(#[source] T),
+    /// The transport layer returned an error
+    #[error("Unexpected response: {0}")]
+    Response(#[from] ResponseError),
     /// Failed to serialize the request
     #[error("Failed to serialize the request: {0}")]
     Serialize(Ser),
@@ -280,6 +283,20 @@ pub enum RpcError<Ser, De, T> {
     /// This error either means the server side is misbehaving quite badly, or the transport is not configured to the correct endpoint
     #[error(transparent)]
     WrongResponseType(#[from] WrongResponseType),
+}
+
+/// Indicates that the transport was successful, but the response indicated some problem
+#[derive(Debug, Error, Clone)]
+pub enum ResponseError {
+    /// Request was improperly formatted
+    #[error("Request was rejected: {0}")]
+    BadRequest(String),
+    /// Internal Server Error
+    #[error("Internal Server Error: {0}")]
+    InternalServerError(String),
+    /// Unexpected response
+    #[error("Unexpected response")]
+    Unexpected,
 }
 
 /// Response was the wrong type: sent a request for one function, but received the response of a different one

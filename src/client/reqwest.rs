@@ -3,6 +3,7 @@
 use bon::bon;
 use crate::AsyncTransport;
 pub use reqwest::Error;
+use crate::client::ResponseError;
 use crate::format::{FormatInfo};
 
 /// An [`AsyncTransport`] which uses the [reqwest] crate
@@ -37,15 +38,22 @@ impl Reqwest {
 impl AsyncTransport for Reqwest {
     type Error = Error;
 
-    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Vec<u8>, Self::Error> {
-        self
+    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+        let response = self
             .client
             .request(self.method.clone(), &self.url)
             .body(request)
             .header(reqwest::header::CONTENT_TYPE, format_info.http_content_type)
             .send()
-            .await?
-            .json()
-            .await
+            .await?;
+        if response.status().is_success() {
+            Ok(Ok(response.json().await?))
+        } else if response.status().is_client_error() {
+            Ok(Err(ResponseError::BadRequest(response.text().await?)))
+        } else if response.status().is_server_error() {
+            Ok(Err(ResponseError::InternalServerError(response.text().await?)))
+        } else {
+            Ok(Err(ResponseError::Unexpected))
+        }
     }
 }

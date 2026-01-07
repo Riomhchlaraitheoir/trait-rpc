@@ -11,6 +11,7 @@ use wasm_bindgen_futures::wasm_bindgen::JsCast;
 use web_sys::wasm_bindgen::JsValue;
 use web_sys::{Request, RequestInit, RequestMode, Response, Window};
 use web_sys::js_sys::{Uint8Array};
+use crate::client::ResponseError;
 use crate::format::FormatInfo;
 
 /// A client which uses the browsers Fetch API along with JSON format (via serde),
@@ -53,7 +54,7 @@ impl Browser {
 impl AsyncTransport for Browser {
     type Error = Error;
 
-    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Vec<u8>, Self::Error> {
+    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
         let opts = self.request_options.clone();
         let body = Uint8Array::from(request.as_slice());
         opts.set_body(&body);
@@ -71,7 +72,13 @@ impl AsyncTransport for Browser {
         let response: Response = response.dyn_into().map_err(Error::CastResponse)?;
         let body = response.array_buffer().map_err(Error::ReadBody)?;
         let body = JsFuture::from(body).await.map_err(Error::ReadBody)?;
-        Ok(Uint8Array::new(&body).to_vec())
+        let body = Uint8Array::new(&body).to_vec();
+        match response.status() {
+            200..=299 => Ok(Ok(body)),
+            400..=499 => Ok(Err(ResponseError::BadRequest(String::from_utf8(body).unwrap()))),
+            500..=599 => Ok(Err(ResponseError::InternalServerError(String::from_utf8(body).unwrap()))),
+            _ => Ok(Err(ResponseError::Unexpected))
+        }
     }
 }
 
