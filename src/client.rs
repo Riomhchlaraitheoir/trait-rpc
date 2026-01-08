@@ -1,11 +1,11 @@
 //! Contains modules for individual client implementations
 #![allow(clippy::future_not_send, reason = "Cannot explicitly make futures `Send` while supporting WASM")]
 
-use std::error::Error;
-use std::fmt::{Debug, Display};
+use crate::format::Format;
 use bon::bon;
+use std::error::Error;
+use std::fmt::Debug;
 use thiserror::Error;
-use crate::format::{Format, FormatInfo};
 
 /// Implementation for making requests from browser wasm using the Fetch API
 #[cfg(all(feature = "browser", target_arch = "wasm32"))]
@@ -109,7 +109,7 @@ where
     T: AsyncTransport,
     Self: Clone
 {
-    type Error = RpcError<F::WriteError, F::ReadError, T::Error>;
+    type Error = RpcError<T::Error>;
     /// Send a request and receive a response
     ///
     /// # Errors
@@ -118,9 +118,8 @@ where
     /// * Failed to serialise/deserialise
     /// * Received the wrong type of response
     async fn send(&self, request: Req) -> Result<Resp, Self::Error> {
-        let mut buffer = Vec::new();
-        self.format.write(request, &mut buffer).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(buffer, F::INFO).await.map_err(RpcError::Transport)??;
+        let request = self.format.write(request).map_err(RpcError::Serialize)?;
+        let response = self.transport.send(request, self.format.content_type()).await.map_err(RpcError::Transport)??;
         let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
         Ok(response)
     }
@@ -132,11 +131,10 @@ where
     T: BlockingTransport,
     Self: Clone
 {
-    type Error = RpcError<F::WriteError, F::ReadError, T::Error>;
+    type Error = RpcError<T::Error>;
     fn send(&self, request: Req) -> Result<Resp, Self::Error> {
-        let mut buffer = Vec::new();
-        self.format.write(request, &mut buffer).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(buffer, F::INFO).map_err(RpcError::Transport)??;
+        let request = self.format.write(request).map_err(RpcError::Serialize)?;
+        let response = self.transport.send(request, self.format.content_type()).map_err(RpcError::Transport)??;
         let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
         Ok(response)
     }
@@ -155,7 +153,7 @@ pub trait AsyncTransport: Clone {
     /// This is the error type which is returned in the case that some part of the transport failed
     type Error: Error + 'static;
     /// Sends the request and returns the response
-    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> impl Future<Output=Result<Result<Vec<u8>, ResponseError>, Self::Error>>;
+    fn send(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output=Result<Result<Vec<u8>, ResponseError>, Self::Error>>;
 }
 
 /// This trait describes the transport layer of a client,
@@ -178,7 +176,7 @@ pub trait BlockingTransport: Clone {
     ///
     /// # Errors
     /// Returns an error in the case that the communication failed for any reason
-    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error>;
+    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error>;
 }
 
 /// This is a transport layer used for nesting services
@@ -263,8 +261,8 @@ where
 }
 
 /// This is a error that the client may return after a request
-#[derive(Debug, Error, Clone)]
-pub enum RpcError<Ser, De, T> {
+#[derive(Debug, Error)]
+pub enum RpcError<T> {
     /// The transport layer returned an error
     #[error("Failed to send request: {0}")]
     Transport(#[source] T),
@@ -273,10 +271,10 @@ pub enum RpcError<Ser, De, T> {
     Response(#[from] ResponseError),
     /// Failed to serialize the request
     #[error("Failed to serialize the request: {0}")]
-    Serialize(Ser),
+    Serialize(Box<dyn Error>),
     /// Failed to deserialize the response
     #[error("Failed to deserialize the response: {0}")]
-    Deserialize(De),
+    Deserialize(Box<dyn Error>),
     /// Response was the wrong type, sent a request for one function, but received the response of a different one
     ///
     /// This is not an expected case and is simply included as an alternative to panicking in this case
@@ -341,7 +339,7 @@ pub trait MaybeWrongResponse: Sized {
     fn into_wrong_response(self) -> Result<WrongResponseType, Self>;
 }
 
-impl<Ser: Debug + Display, De: Debug + Display, T: Error> MaybeWrongResponse for RpcError<Ser, De, T> {
+impl<T: Error> MaybeWrongResponse for RpcError<T> {
     fn into_wrong_response(self) -> Result<WrongResponseType, Self> {
         if let Self::WrongResponseType(err) = self {
             Ok(err)

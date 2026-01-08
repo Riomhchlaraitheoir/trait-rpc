@@ -12,7 +12,6 @@ use web_sys::wasm_bindgen::JsValue;
 use web_sys::{Request, RequestInit, RequestMode, Response, Window};
 use web_sys::js_sys::{Uint8Array};
 use crate::client::ResponseError;
-use crate::format::FormatInfo;
 
 /// A client which uses the browsers Fetch API along with JSON format (via serde),
 /// only supported on wasm32 architecture
@@ -54,7 +53,7 @@ impl Browser {
 impl AsyncTransport for Browser {
     type Error = Error;
 
-    async fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+    async fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
         let opts = self.request_options.clone();
         let body = Uint8Array::from(request.as_slice());
         opts.set_body(&body);
@@ -63,7 +62,7 @@ impl AsyncTransport for Browser {
             Request::new_with_str_and_init(&self.url, &opts).map_err(Error::NewRequest)?;
         request
             .headers()
-            .set("Content-Type", format_info.http_content_type)
+            .set("Content-Type", content_type)
             .map_err(Error::SetHeader)?;
 
         let promise = self.window.fetch_with_request(&request);

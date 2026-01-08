@@ -4,7 +4,6 @@ pub use reqwest::Error;
 use reqwest::blocking::Client;
 use reqwest::{Method};
 use crate::client::ResponseError;
-use crate::format::{FormatInfo};
 
 /// A [`AsyncTransport`] which uses the [reqwest] crate
 #[derive(Debug, Clone)]
@@ -37,12 +36,12 @@ impl ReqwestBlocking {
 impl BlockingTransport for ReqwestBlocking {
     type Error = Error;
 
-    fn send(&self, request: Vec<u8>, format_info: &FormatInfo) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
         let response = self
             .client
             .request(self.method.clone(), &self.url)
             .body(request)
-            .header(reqwest::header::CONTENT_TYPE, format_info.http_content_type)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
             .send()?;
         if response.status().is_success() {
             Ok(Ok(response.json()?))

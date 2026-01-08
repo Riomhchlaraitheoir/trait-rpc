@@ -1,4 +1,4 @@
-use crate::format::{DynFormat, Format};
+use crate::format::{Format};
 #[allow(unused_imports, reason = "only used if certain features are enabled")]
 use crate::format;
 use crate::{Handler, Rpc};
@@ -7,7 +7,6 @@ use axum::extract::{FromRequest, Request};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderName, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use bon::__::IsUnset;
 use bon::Builder;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -15,6 +14,7 @@ use std::convert::Infallible;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use bon::__::IsUnset;
 use tower::Service;
 
 /// A service which serves an RPC service in multiple formats as part of an axum server
@@ -103,7 +103,7 @@ where
     }
 }
 
-type Formats<R> = Vec<&'static dyn DynFormat<<R as Rpc>::Request, <R as Rpc>::Response>>;
+type Formats<R> = Vec<&'static dyn Format<<R as Rpc>::Request, <R as Rpc>::Response>>;
 type RpcRequest<H> = <HandlerRpc<H> as Rpc>::Request;
 type RpcResponse<H> = <HandlerRpc<H> as Rpc>::Response;
 type HandlerRpc<H> = <H as Handler>::Rpc;
@@ -152,23 +152,22 @@ where
             let content_type = content_type.split(';').next().unwrap_or(content_type);
             let format = formats
                 .iter()
-                .find(|format| format.info().http_content_type == content_type)
+                .find(|format| format.content_type() == content_type)
                 .ok_or(Error::UnsupportedContentType)?;
             let bytes = Bytes::from_request(req, &())
                 .await
                 .map_err(|error| Error::Internal(error.to_string()))?;
             let request = format
-                .read(&mut &*bytes)
-                .map_err(Error::Deserialise)?;
+                .read(&bytes)
+                .map_err(|error| Error::Deserialise(error.to_string()))?;
             let response = server.deref().handle(request).await;
-            let mut buffer = Vec::new();
-            format
-                .write(response, &mut buffer)
-                .map_err(Error::Serialise)?;
+            let response = format
+                .write(response)
+                .map_err(|error| Error::Serialise(error.to_string()))?;
             Ok((
                 StatusCode::OK,
-                [(CONTENT_TYPE, format.info().http_content_type)],
-                buffer,
+                [(CONTENT_TYPE, format.content_type())],
+                response,
             ))
         }
     }
