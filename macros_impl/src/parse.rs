@@ -1,5 +1,8 @@
 use crate::{Method, Rpc};
-use syn::{FnArg, ItemTrait, ReturnType, TraitItem, TraitItemFn, Type, TypeParamBound, parse_quote, Attribute, MetaNameValue, Meta, Expr};
+use syn::{
+    Attribute, Expr, FnArg, GenericArgument, ItemTrait, Meta, MetaNameValue, PathArguments,
+    PathSegment, ReturnType, TraitItem, TraitItemFn, Type, TypeParamBound, TypePath, parse_quote,
+};
 
 /// This contains any args in the attribute macro invocation that may affect parsing
 // There are no such args for now, but we will keep this just in case tha changes
@@ -7,6 +10,7 @@ pub struct Parser;
 
 #[allow(clippy::unused_self)]
 impl Parser {
+    // TODO: use proc-macro-rules to simplify parsing
     pub fn rpc(&self, input: ItemTrait) -> syn::Result<Rpc> {
         let mut methods = vec![];
         for item in input.items {
@@ -86,7 +90,12 @@ impl Parser {
         }
         let ret = self.return_type(item.sig.output)?;
         let docs = item.attrs.iter().filter_map(docs).collect();
-        Ok(Method { docs, name, args, ret })
+        Ok(Method {
+            docs,
+            name,
+            args,
+            ret,
+        })
     }
 
     fn return_type(&self, output: ReturnType) -> syn::Result<super::ReturnType> {
@@ -118,6 +127,18 @@ impl Parser {
                         Err(syn::Error::new_spanned(ty, "no bounds found"))
                     }
                 } else {
+                    if let Type::Path(TypePath { qself: None, path }) = &*ty
+                        && path.segments.len() == 1
+                    {
+                        let PathSegment { ident, arguments } = &path.segments[0];
+                        if ident == "Stream"
+                            && let PathArguments::AngleBracketed(args) = arguments
+                            && args.args.len() == 1
+                            && let GenericArgument::Type(ty) = &args.args[0]
+                        {
+                            return Ok(super::ReturnType::Streaming(ty.clone()));
+                        }
+                    }
                     Ok(super::ReturnType::Simple(*ty))
                 }
             }
@@ -141,9 +162,9 @@ fn docs(attr: &Attribute) -> Option<Expr> {
 mod test {
     use crate::parse::Parser;
     use syn::parse_quote;
-    use syn::{ReturnType, Type, TypeTuple};
     use syn::punctuated::Punctuated;
     use syn::token::Paren;
+    use syn::{ReturnType, Type, TypeTuple};
 
     macro_rules! return_type_tests {
         ($($name:ident: $output:expr => {$($input:tt)*}),*) => {

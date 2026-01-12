@@ -5,6 +5,7 @@ use crate::format::Format;
 use bon::bon;
 use std::error::Error;
 use std::fmt::Debug;
+use futures::{Stream, StreamExt};
 use thiserror::Error;
 
 /// Implementation for making requests from browser wasm using the Fetch API
@@ -18,11 +19,9 @@ pub mod reqwest;
 /// Implementation for making requests using the reqwest crate
 #[cfg(all(feature = "reqwest-blocking", not(target_arch = "wasm32")))]
 pub mod reqwest_blocking;
-#[cfg(feature = "websocket-client")]
+#[cfg(all(feature = "websocket-client", not(target_arch = "wasm32")))]
 pub mod websocket;
-#[cfg(all(feature = "wasm-websocket", not(target_arch = "wasm32")))]
-compile_error!("wasm-websocket feature is only available for wasm32 target arch");
-#[cfg(all(feature = "wasm-websocket", target_arch = "wasm32"))]
+#[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
 pub mod wasm_websocket;
 
 #[cfg(all(feature = "reqwest-blocking", target_arch = "wasm32"))]
@@ -89,6 +88,12 @@ pub trait AsyncClient<Req, Resp>: Clone {
     fn send(&self, request: Req) -> impl Future<Output = Result<Resp, Self::Error>>;
 }
 
+/// A client implementation for sending requests asynchronously
+pub trait StreamClient<Req, Resp>: AsyncClient<Req, Resp> {
+    /// Send a request and receive a response
+    fn send_streaming_response(&self, request: Req) -> impl Future<Output = Result<impl Stream<Item = Result<Resp, Self::Error>>, Self::Error>>;
+}
+
 /// A client implementation for sending requests in a blocking manner
 pub trait BlockingClient<Req, Resp>: Clone {
     /// The error that can happen during send
@@ -129,6 +134,24 @@ where
         let response = self.transport.send(request, self.format.content_type()).await.map_err(RpcError::Transport)??;
         let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
         Ok(response)
+    }
+}
+
+impl<F, T, Req, Resp> StreamClient<Req, Resp> for SimpleClient<F, T>
+where
+    F: Format<Resp, Req>,
+    T: StreamTransport,
+    Self: Clone
+{
+    async fn send_streaming_response(&self, request: Req) -> Result<impl Stream<Item=Result<Resp, Self::Error>>, Self::Error> {
+        let request = self.format.write(request).map_err(RpcError::Serialize)?;
+        let stream = self.transport.stream_resp(request, self.format.content_type()).await.map_err(RpcError::Transport)?;
+        let stream = stream.map(|response| -> Result<Resp, Self::Error> {
+            let response = response.map_err(RpcError::Transport)?;
+            let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
+            Ok(response)
+        });
+        Ok(stream)
     }
 }
 
@@ -184,6 +207,20 @@ pub trait BlockingTransport: Clone {
     /// # Errors
     /// Returns an error in the case that the communication failed for any reason
     fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error>;
+}
+
+/// This trait describes the transport layer of a client,
+///
+/// It is responsible for sending the request and waiting for a response
+///
+/// This is not tied to any particular form of serialisation or communication, nor is it tied to
+/// any crate like serde, an individual transport layer may choose what limitations to place on the
+/// request/response types
+///
+/// Naturally a format and protocol the is supported by the server should be chosen
+pub trait StreamTransport: AsyncTransport {
+    /// Sends the request and returns the response
+    fn stream_resp(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output = Result<impl Stream<Item=Result<Vec<u8>, Self::Error>>, Self::Error>>;
 }
 
 /// This is a transport layer used for nesting services

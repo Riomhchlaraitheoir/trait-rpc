@@ -1,18 +1,27 @@
-#[allow(unused_imports, reason = "These might not always be used, but they should be available in this module anyway")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but they should be available in this module anyway"
+)]
 pub use todo_service::{
     TodoService, TodoServiceAsyncClient, TodoServiceBlockingClient, TodoServiceServer,
 };
 
-#[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but it's easier to include always"
+)]
 mod todo_service {
     use super::*;
+    use std::convert::Infallible;
+    use std::marker::PhantomData;
     use ::trait_rpc::{
-        Rpc,
-        client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        futures::sink::{Sink, SinkExt},
+        futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::Handler,
+        Rpc
     };
-    use std::marker::PhantomData;
 
     /// A service for managing to-do items
     ///
@@ -20,8 +29,10 @@ mod todo_service {
     pub struct TodoService;
 
     impl Rpc for TodoService {
-        type AsyncClient<_Client: AsyncClient<Self::Request, Self::Response>> = TodoServiceAsyncClient<_Client>;
-        type BlockingClient<_Client: BlockingClient<Self::Request, Self::Response>> = TodoServiceBlockingClient<_Client>;
+        type AsyncClient<_Client: AsyncClient<Self::Request, Self::Response>> =
+            TodoServiceAsyncClient<_Client>;
+        type BlockingClient<_Client: BlockingClient<Self::Request, Self::Response>> =
+            TodoServiceBlockingClient<_Client>;
         type Request = Request;
         type Response = Response;
         fn async_client<_Client: AsyncClient<Request, Response>>(
@@ -53,6 +64,15 @@ mod todo_service {
         GetTodo(String),
         #[serde(rename = "new_todo")]
         NewTodo(Todo),
+    }
+    impl ::trait_rpc::Request for Request {
+        fn is_streaming_response(&self) -> bool {
+            match self {
+                Self::GetTodos(..) => false,
+                Self::GetTodo(..) => false,
+                Self::NewTodo(..) => false,
+            }
+        }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -99,6 +119,16 @@ mod todo_service {
                 Request::GetTodos() => Response::GetTodos(self.0.get_todos().await),
                 Request::GetTodo(name) => Response::GetTodo(self.0.get_todo(name).await),
                 Request::NewTodo(todo) => Response::NewTodo(self.0.new_todo(todo).await),
+                _ => panic!("This is a streaming method, must call handle_streaming"),
+            }
+        }
+        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
+            &self,
+            request: Request,
+            sink: S,
+        ) {
+            match request {
+                _ => panic!("This is not a streaming method, must call handle"),
             }
         }
     }
@@ -124,10 +154,7 @@ mod todo_service {
             }
         }
         /// Get a to-do item by name, returns None if no to-do item with the given name exists
-        pub async fn get_todo(
-            &self,
-            name: String,
-        ) -> Result<Option<Todo>, _Client::Error> {
+        pub async fn get_todo(&self, name: String) -> Result<Option<Todo>, _Client::Error> {
             match self.0.send(Request::GetTodo(name)).await? {
                 Response::GetTodo(value) => Ok(value),
                 other => Err(WrongResponseType::new("get_todo", other.fn_name()).into()),
@@ -161,10 +188,7 @@ mod todo_service {
             }
         }
         /// Get a to-do item by name, returns None if no to-do item with the given name exists
-        pub fn get_todo(
-            &self,
-            name: String,
-        ) -> Result<Option<Todo>, _Client::Error> {
+        pub fn get_todo(&self, name: String) -> Result<Option<Todo>, _Client::Error> {
             match self.0.send(Request::GetTodo(name))? {
                 Response::GetTodo(value) => Ok(value),
                 other => Err(WrongResponseType::new("get_todo", other.fn_name()).into()),

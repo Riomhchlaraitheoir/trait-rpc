@@ -3,13 +3,16 @@ pub use resources::{Resources, ResourcesAsyncClient, ResourcesBlockingClient, Re
 #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
 mod resources {
     use super::*;
+    use std::convert::Infallible;
+    use std::marker::PhantomData;
     use ::trait_rpc::{
-        Rpc,
-        client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        futures::sink::{Sink, SinkExt},
+        futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::Handler,
+        Rpc
     };
-    use std::marker::PhantomData;
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct Resources<T>(PhantomData<fn() -> (T,)>);
     impl<T> Rpc for Resources<T>
@@ -43,6 +46,8 @@ mod resources {
     #[serde(crate = "::trait_rpc::serde")]
     #[serde(tag = "method", content = "args")]
     pub enum Request<T> {
+        #[serde(rename = "subscribe")]
+        Subscribe(),
         #[serde(rename = "list")]
         List(),
         #[serde(rename = "get")]
@@ -50,10 +55,23 @@ mod resources {
         #[serde(rename = "new")]
         New(T),
     }
+    impl<T> ::trait_rpc::Request for Request<T> {
+        fn is_streaming_response(&self) -> bool {
+            match self {
+                Self::Subscribe(..) => true,
+                Self::List(..) => false,
+                Self::Get(..) => false,
+                Self::New(..) => false,
+            }
+        }
+    }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
     #[serde(tag = "method", content = "result")]
     pub enum Response<T> {
+        #[serde(rename = "subscribe")]
+        Subscribe(T),
         #[serde(rename = "list")]
         List(Vec<T>),
         #[serde(rename = "get")]
@@ -64,6 +82,7 @@ mod resources {
     impl<T> Response<T> {
         fn fn_name(&self) -> &'static str {
             match self {
+                Self::Subscribe(..) => "subscribe",
                 Self::List(..) => "list",
                 Self::Get(..) => "get",
                 Self::New(..) => "new",
@@ -72,6 +91,7 @@ mod resources {
     }
     /// This is the trait which is used by the server side in order to serve the client
     pub trait ResourcesServer<T>: Send + Sync {
+        fn subscribe(&self, sink: impl Sink<T, Error = Infallible> + Send + 'static) -> impl Future<Output = ()> + Send;
         fn list(&self) -> impl Future<Output = Vec<T>> + Send;
         fn get(&self, id: u64) -> impl Future<Output = Option<T>> + Send;
         fn new(&self, value: T) -> impl Future<Output = ()> + Send;
@@ -86,6 +106,16 @@ mod resources {
                 Request::List() => Response::List(self.0.list().await),
                 Request::Get(id) => Response::Get(self.0.get(id).await),
                 Request::New(value) => Response::New(self.0.new(value).await),
+                _ => panic!("This is a streaming method, must call handle_streaming"),
+            }
+        }
+        async fn handle_stream_response<S: Sink<Response<T>, Error = Infallible> + Send + 'static>(&self, request: Request<T>, sink: S) {
+            match request {
+                Request::Subscribe() => {
+                    let sink = sink.with(async |value| Result::<_, S::Error>::Ok(Response::Subscribe(value)));
+                    self.0.subscribe(sink).await;
+                },
+                _ => panic!("This is not a streaming method, must call handle"),
             }
         }
     }
@@ -99,6 +129,16 @@ mod resources {
     pub struct ResourcesAsyncClient<_Client, T>(_Client, (PhantomData<fn() -> (T,)>));
     #[allow(clippy::future_not_send)]
          impl<_Client: AsyncClient<Request<T>, Response<T>>, T> ResourcesAsyncClient<_Client, T> {
+        pub async fn subscribe(&self) -> Result<impl Stream<Item = Result<T, _Client::Error>>, _Client::Error> where _Client: StreamClient<Request<T>, Response<T>> {
+            let stream = self.0.send_streaming_response(Request::Subscribe()).await?;
+            Ok(stream.map(|value| {
+                match value {
+                    Ok(Response::Subscribe(value)) => Ok(value),
+                    Ok(other) => Err(WrongResponseType::new("subscribe", other.fn_name()).into()),
+                    Err(error) => {Err(error.into())},
+                }
+            }))
+        }
         pub async fn list(&self) -> Result<Vec<T>, _Client::Error> {
             match self.0.send(Request::List()).await? {
                 Response::List(value) => Ok(value),

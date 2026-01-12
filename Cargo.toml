@@ -24,10 +24,9 @@ nursery = { level = "warn", priority = -1 }
 [features]
 axum = ["dep:axum", "dep:tower", "axum/ws"]
 browser = ["dep:web-sys", "dep:wasm-bindgen-futures"]
-wasm-websocket = ["dep:web-sys", "dep:wasm-bindgen-futures", "dep:ws_stream_wasm"]
 reqwest-blocking = ["dep:reqwest", "reqwest/blocking"]
 reqwest = ["dep:reqwest"]
-websocket-client = ["dep:tokio-tungstenite", "dep:tokio"]
+websocket-client = ["dep:tokio-tungstenite", "dep:tokio", "dep:web-sys", "dep:wasm-bindgen-futures", "dep:ws_stream_wasm"]
 json = ["dep:serde_json"]
 browser-json = ["dep:serde-wasm-bindgen", "dep:web-sys", "dep:wasm-bindgen-futures"]
 cbor = ["dep:ciborium"]
@@ -43,28 +42,32 @@ macros = { package = "trait-rpc-macros", path = "macros" }
 futures = "0.3.31"
 bon = "3.8.1"
 tracing = "0.1.44"
-tokio-tungstenite = { version = "0.28.0", optional = true }
-ws_stream_wasm = { version = "0.7.5", optional = true }
 
 # Formats
 serde_json = { version = "1.0.145", optional = true }
 ciborium = { version = "0.2.2", optional = true }
 
-# WASM dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ws_stream_wasm = { version = "0.7.5", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
-[dependencies.web-sys]
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
 version = "0.3"
 optional = true
 features = ["Window", "Request", "Response", "RequestInit", "RequestMode", "ReadableStream", "Headers"]
 
 [target.'cfg(not(target_arch="wasm32"))'.dependencies]
+tokio-tungstenite = { version = "0.28.0", optional = true }
 tokio = { version = "1.48.0", features = ["full"], optional = true }
 
 [[example]]
 name = "todo_client"
 required-features = ["reqwest", "__examples_tokio"]
+
+[[example]]
+name = "websocket_client"
+required-features = ["reqwest", "__examples_tokio", "websocket-client"]
 
 [[example]]
 name = "blocking_client"

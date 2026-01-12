@@ -1,6 +1,6 @@
 #[allow(unused_imports, reason = "only used if certain features are enabled")]
 use crate::format;
-use crate::format::Format;
+use crate::format::{IsFormat, Format};
 use crate::{get_request_id, prepend_id, Handler, Rpc};
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
@@ -152,7 +152,7 @@ where
                 && let Ok(ConnectInfo(addr)) = req.extract_parts::<ConnectInfo<SocketAddr>>().await
             {
                 println!("Upgrading to websocket at {addr}");
-                let protocols: Vec<_> = formats.iter().copied().map(Format::content_type).collect();
+                let protocols: Vec<_> = formats.iter().copied().map(IsFormat::content_type).collect();
                 ws = ws.protocols(protocols.clone());
                 let protocol = ws
                     .selected_protocol()

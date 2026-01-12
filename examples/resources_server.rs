@@ -2,7 +2,11 @@
 
 use axum::Router;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
+use std::convert::Infallible;
+use std::pin::pin;
+use futures::{Sink, SinkExt};
+use tokio::sync::{broadcast, RwLock};
+use tokio::sync::broadcast::error::RecvError;
 use trait_rpc::server::axum::Axum;
 
 include!("traits/resources.rs");
@@ -37,12 +41,14 @@ async fn main() {
 
 struct ResourceServer<T> {
     map: RwLock<HashMap<u64, T>>,
+    new: broadcast::Sender<T>,
 }
 
-impl<T> Default for ResourceServer<T> {
+impl<T: Resource> Default for ResourceServer<T> {
     fn default() -> Self {
         Self {
             map: RwLock::default(),
+            new: broadcast::channel(10).0
         }
     }
 }
@@ -64,6 +70,23 @@ impl Resource for Author {
 }
 
 impl<T: Resource> ResourcesServer<T> for ResourceServer<T> {
+    async fn subscribe(&self, sink: impl Sink<T, Error = Infallible> + Send + 'static) {
+        let mut sink = pin!(sink);
+        let mut receiver = self.new.subscribe();
+        loop {
+            match receiver.recv().await {
+                Ok(value) => match sink.send(value).await {
+                    Ok(()) => {},
+                    Err(err) => {
+                        match err {}
+                    }
+                },
+                Err(RecvError::Closed) => break,
+                Err(RecvError::Lagged(_)) => {},
+            }
+        }
+    }
+
     async fn list(&self) -> Vec<T> {
         self.map.read().await.values().cloned().collect()
     }

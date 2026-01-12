@@ -1,41 +1,43 @@
 //! Defines a websocket client
 
-use crate::client::AsyncClient;
-use crate::format::Format;
-use crate::{RpcError, get_request_id, prepend_id};
+use crate::client::ResponseError;
+use crate::format::IsFormat;
+use crate::{get_request_id, prepend_id, AsyncTransport};
 use futures::channel::{mpsc, oneshot};
 use futures::lock::Mutex;
-use futures::{FutureExt, SinkExt, StreamExt, select};
+use futures::{select, FutureExt, SinkExt, StreamExt};
 use std::collections::HashMap;
-use std::error::Error;
 use std::mem;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use thiserror::Error;
-use tracing::{error, warn};
+use tracing::warn;
 use wasm_bindgen_futures::spawn_local;
 use ws_stream_wasm::{CloseEvent, WsErr, WsMessage, WsMeta};
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
 /// A client which communicates using a websocket connection
-pub struct WebsocketClient<Req, Resp> {
-    sender: Arc<Mutex<mpsc::Sender<(u32, Req)>>>,
-    senders: SenderMap<Resp>,
+pub struct Websocket {
+    sender: RequestSender,
+    senders: SenderMap,
+    content_type: &'static str
 }
 
-type SenderMap<Resp> = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Resp, WebsocketError>>>>>;
+type RequestSender = Arc<Mutex<mpsc::Sender<(u32, Vec<u8>)>>>;
+type SenderMap = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Vec<u8>, WebsocketError>>>>>;
 
-impl<Req, Resp> Clone for WebsocketClient<Req, Resp> {
+impl Clone for Websocket {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
             senders: self.senders.clone(),
+            content_type: self.content_type
         }
     }
 }
 
-impl<Req: Send + 'static, Resp: Send + 'static> WebsocketClient<Req, Resp> {
+impl Websocket {
     /// Create a new websocket client
     ///
     /// # Errors
@@ -45,12 +47,12 @@ impl<Req: Send + 'static, Resp: Send + 'static> WebsocketClient<Req, Resp> {
     /// Certain unexpected edge cases that cannot be proven safe with the type system may cause a panic
     pub async fn new(
         url: impl AsRef<str>,
-        format: impl Format<Resp, Req> + 'static,
+        format: impl IsFormat,
     ) -> Result<Self, WsErr> {
         let (meta, mut stream) = WsMeta::connect(url, Some(vec![format.content_type()])).await?;
         let (sender, mut request_receiver) = mpsc::channel(100);
         let sender = Arc::new(Mutex::new(sender));
-        let senders: SenderMap<Resp> = Arc::default();
+        let senders: SenderMap = Arc::default();
         spawn_local({
             let response_senders = senders.clone();
             async move {
@@ -59,18 +61,6 @@ impl<Req: Send + 'static, Resp: Send + 'static> WebsocketClient<Req, Resp> {
                                         req = request_receiver.next() => {
                                             let Some((request_id, request)) = req else {
                                                 continue 'worker;
-                                            };
-                                            let request = match format.write(request) {
-                                                Ok(request) => request,
-                                                Err(error) => {
-                                                    let Some(response) = response_senders.lock().await.remove(&request_id) else {
-                                                        error!("Response sender was not loaded prior to request");
-                                                        continue 'worker;
-                                                    };
-                                                    // will only fail if the future is dropped, this case is not considered an error and can safely be ignored
-                                                    let _ = response.send(Err(WebsocketError::SerialiseRequest(error)));
-                                                    continue 'worker;
-                                                }
                                             };
                                             let request = prepend_id(request_id, request);
                                             if let Err(error) = stream.send(WsMessage::Binary(request)).await {
@@ -93,14 +83,7 @@ impl<Req: Send + 'static, Resp: Send + 'static> WebsocketClient<Req, Resp> {
                                                 };
                                                 let (request_id, response) = get_request_id(&response);
                                                 let sender = response_senders.lock().await.remove(&request_id).expect("sender not found");
-                                                let response = match format.read(response) {
-                                                    Ok(response) => response,
-                                                    Err(error) => {
-                                                        let _: Result<(), _> = sender.send(Err(WebsocketError::DeserialiseResponse(error)));
-                                                        continue 'worker;
-                                                    }
-                                                };
-                                                let _: Result<(), _> = sender.send(Ok(response));
+                                                let _: Result<(), _> = sender.send(Ok(response.to_vec()));
                                         }
                                         }
                 };
@@ -113,14 +96,20 @@ impl<Req: Send + 'static, Resp: Send + 'static> WebsocketClient<Req, Resp> {
                 }
             }
         });
-        Ok(Self { sender, senders })
+        Ok(Self { sender, senders, content_type: format.content_type() })
     }
 }
 
-impl<Req, Resp> AsyncClient<Req, Resp> for WebsocketClient<Req, Resp> {
-    type Error = RpcError<WebsocketError>;
+impl AsyncTransport for Websocket {
+    type Error = WebsocketError;
 
-    async fn send(&self, request: Req) -> Result<Resp, Self::Error> {
+    async fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+        if self.content_type != content_type {
+            return Err(WebsocketError::IncorrectContentType {
+                expected: self.content_type,
+                received: content_type.to_string(),
+            })
+        }
         let (sender, receiver) = oneshot::channel();
         let request_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         self.senders.lock().await.insert(request_id, sender);
@@ -129,11 +118,10 @@ impl<Req, Resp> AsyncClient<Req, Resp> for WebsocketClient<Req, Resp> {
             .await
             .send((request_id, request))
             .await
-            .map_err(|_| RpcError::Transport(WebsocketError::RequestChannelClosed))?;
-        receiver
+            .map_err(|_| WebsocketError::RequestChannelClosed)?;
+        Ok(Ok(receiver
             .await
-            .map_err(|_| RpcError::Transport(WebsocketError::ResponseChannelClosed))?
-            .map_err(RpcError::Transport)
+            .map_err(|_| WebsocketError::ResponseChannelClosed)??))
     }
 }
 
@@ -146,13 +134,15 @@ pub enum WebsocketError {
     /// The websocket worker has closed the response channel, this is not expected
     #[error("Failed to read response from worker: channel closed")]
     ResponseChannelClosed,
-    /// The request could not be serialised
-    #[error("Failed to write request: {0}")]
-    SerialiseRequest(Box<dyn Error + Send>),
-    /// The response could not be deserialised
-    #[error("Failed to write request: {0}")]
-    DeserialiseResponse(Box<dyn Error + Send>),
     /// The websocket connection has closed
     #[error("Websocket connection closed")]
     ConnectionClosed,
+    /// The client is not using the same content type as the websocket transport
+    #[error("The client is not using the same content type as the websocket transport, expected: {expected}, received: {received}")]
+    IncorrectContentType {
+        /// The content type defined in the websocket transport
+        expected: &'static str,
+        /// The content type defined in the client
+        received: String,
+    },
 }

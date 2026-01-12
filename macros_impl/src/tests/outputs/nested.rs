@@ -6,13 +6,16 @@ pub use api_service::{
 #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
 mod api_service {
     use super::*;
+    use std::convert::Infallible;
+    use std::marker::PhantomData;
     use ::trait_rpc::{
-        Rpc,
-        client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        futures::sink::{Sink, SinkExt},
+        futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::Handler,
+        Rpc
     };
-    use std::marker::PhantomData;
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct ApiService;
     impl Rpc for ApiService {
@@ -47,6 +50,14 @@ mod api_service {
         Users(<UsersService as Rpc>::Request),
         #[serde(rename = "login")]
         Login(String, String),
+    }
+    impl ::trait_rpc::Request for Request {
+        fn is_streaming_response(&self) -> bool {
+            match self {
+                Self::Users(..) => false,
+                Self::Login(..) => false,
+            }
+        }
     }
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
@@ -89,6 +100,16 @@ mod api_service {
                 Request::Login(username, password) => {
                     Response::Login(self.0.login(username, password).await)
                 }
+                _ => panic!("This is a streaming method, must call handle_streaming"),
+            }
+        }
+        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
+            &self,
+            request: Request,
+            sink: S,
+        ) {
+            match request {
+                _ => panic!("This is not a streaming method, must call handle"),
             }
         }
     }
@@ -204,13 +225,16 @@ pub use users_service::{
 #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
 mod users_service {
     use super::*;
+    use std::convert::Infallible;
+    use std::marker::PhantomData;
     use ::trait_rpc::{
-        Rpc,
-        client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        futures::sink::{Sink, SinkExt},
+        futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::Handler,
+        Rpc
     };
-    use std::marker::PhantomData;
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UsersService;
     impl Rpc for UsersService {
@@ -249,6 +273,16 @@ mod users_service {
         ById(u64, <UserService as Rpc>::Request),
         #[serde(rename = "current")]
         Current(LoginToken, <UserService as Rpc>::Request),
+    }
+    impl ::trait_rpc::Request for Request {
+        fn is_streaming_response(&self) -> bool {
+            match self {
+                Self::New(..) => false,
+                Self::List(..) => false,
+                Self::ById(..) => false,
+                Self::Current(..) => false,
+            }
+        }
     }
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
@@ -300,7 +334,17 @@ mod users_service {
                 Request::Current(token, request) => {
                     let response = self.0.current(token).await.handle(request).await;
                     Response::Current(response)
-                }
+                },
+                _ => panic!("This is a streaming method, must call handle_streaming"),
+            }
+        }
+        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
+            &self,
+            request: Request,
+            sink: S,
+        ) {
+            match request {
+                _ => panic!("This is not a streaming method, must call handle"),
             }
         }
     }
@@ -492,13 +536,16 @@ pub use user_service::{
 #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
 mod user_service {
     use super::*;
+    use std::convert::Infallible;
+    use std::marker::PhantomData;
     use ::trait_rpc::{
-        Rpc,
-        client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        futures::sink::{Sink, SinkExt},
+        futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::Handler,
+        Rpc
     };
-    use std::marker::PhantomData;
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UserService;
     impl Rpc for UserService {
@@ -535,6 +582,15 @@ mod user_service {
         Update(UserUpdate),
         #[serde(rename = "delete")]
         Delete(),
+    }
+    impl ::trait_rpc::Request for Request {
+        fn is_streaming_response(&self) -> bool {
+            match self {
+                Self::Get(..) => false,
+                Self::Update(..) => false,
+                Self::Delete(..) => false,
+            }
+        }
     }
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
@@ -575,6 +631,16 @@ mod user_service {
                 Request::Get() => Response::Get(self.0.get().await),
                 Request::Update(user) => Response::Update(self.0.update(user).await),
                 Request::Delete() => Response::Delete(self.0.delete().await),
+                _ => panic!("This is a streaming method, must call handle_streaming"),
+            }
+        }
+        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
+            &self,
+            request: Request,
+            sink: S,
+        ) {
+            match request {
+                _ => panic!("This is not a streaming method, must call handle"),
             }
         }
     }

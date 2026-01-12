@@ -1,5 +1,7 @@
 //! Contains modules for individual server implementations
 
+use std::convert::Infallible;
+use futures::Sink;
 use crate::Rpc;
 
 /// Helpers for serving a service from an axum server
@@ -18,4 +20,10 @@ pub trait Handler: Send {
         &self,
         request: <Self::Rpc as Rpc>::Request,
     ) -> impl Future<Output = <Self::Rpc as Rpc>::Response> + Send;
+    /// takes the request and returns a response, see [trait documentation](Self) for details
+    fn handle_stream_response<S: Sink<<Self::Rpc as Rpc>::Response, Error = Infallible> + Send + 'static>(
+        &self,
+        request: <Self::Rpc as Rpc>::Request,
+        sink: S,
+    ) -> impl Future<Output = ()> + Send;
 }

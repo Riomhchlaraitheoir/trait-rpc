@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thiserror::Error;
 use web_sys::js_sys;
-use crate::format::{Format};
+use crate::format::{Format, IsFormat};
 
 const CONTENT_TYPE: & str = "application/json";
 
@@ -15,13 +15,15 @@ const CONTENT_TYPE: & str = "application/json";
 /// [JavaScript Object Notation](https://www.json.org/)
 pub struct BrowserJson;
 
-impl<Read, Write> Format<Read, Write> for BrowserJson
-where Read: DeserializeOwned, Write: Serialize
-{
+impl IsFormat for BrowserJson {
     fn content_type(&self) -> &'static str {
         CONTENT_TYPE
     }
+}
 
+impl<Read, Write> Format<Read, Write> for BrowserJson
+where Read: DeserializeOwned, Write: Serialize
+{
     fn read(&self, json: &[u8]) -> Result<Read, Box<dyn StdError + Send>> {
         Self::read_impl(json).map_err(|e| Box::new(e) as Box<dyn StdError + Send>)
     }

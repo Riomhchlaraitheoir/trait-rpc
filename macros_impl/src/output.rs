@@ -2,7 +2,7 @@ use crate::{ReturnType, Rpc};
 use convert_case::ccase;
 use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{Field, FieldMutability, Visibility, parse_quote};
+use syn::{Field, FieldMutability, Visibility, parse_quote, Generics};
 
 macro_rules! ident_ccase {
     ($case:ident, $ident:expr) => {
@@ -57,7 +57,7 @@ impl ToTokens for Rpc {
             )
         };
 
-        let request_variants = self.methods.iter().map(|method| {
+        let (request_variants, request_streaming): (Vec<_>, Vec<_>) = self.methods.iter().map(|method| {
             let snake_name = method.name.to_string();
             let name = ident_ccase!(pascal, method.name);
             let mut fields: Vec<_> = method
@@ -80,17 +80,23 @@ impl ToTokens for Rpc {
                     <#ret as Rpc>::Request
                 });
             }
-            quote!(
-                #[serde(rename = #snake_name)]
-                #name(#(#fields),*)
+            let streaming = matches!(method.ret, ReturnType::Streaming(_));
+            (
+                quote!(
+                    #[serde(rename = #snake_name)]
+                    #name(#(#fields),*)
+                ),
+                quote!(
+                    Self::#name(..) => #streaming
+                )
             )
-        });
+        }).unzip();
 
         let response_variants = self.methods.iter().map(|method| {
             let snake_name = method.name.to_string();
             let name = ident_ccase!(pascal, method.name);
             let ret = match &method.ret {
-                ReturnType::Simple(ty) => ty.clone(),
+                ReturnType::Simple(ty) | ReturnType::Streaming(ty) => ty.clone(),
                 ReturnType::Nested {
                     service: path,
                 } => {
@@ -128,13 +134,19 @@ impl ToTokens for Rpc {
                         fn #name(&self #(,#params)*) -> impl Future<Output = impl Handler<Rpc = #path>> + Send;
                     }
                 }
+                ReturnType::Streaming(ret) => {
+                    quote! {
+                        #docs
+                        fn #name(&self, sink: impl Sink<#ret, Error = Infallible> + Send + 'static #(,#params)*) -> impl Future<Output=()> + Send;
+                    }
+                }
             }
         });
-        let handle_arms = self.methods.iter().map(|method| {
+        let (handle_arms, stream_handle_arms): (Vec<_>, Vec<_>) = self.methods.iter().map(|method| {
             let name = &method.name;
             let variant = ident_ccase!(pascal, method.name);
             let params = method.args.iter().map(|pat| &pat.pat).collect::<Vec<_>>();
-            match &method.ret {
+            let handle = match &method.ret {
                 ReturnType::Nested { service: _ } => {
                     quote! {
                         Request::#variant(#(#params, )*request) => {
@@ -145,14 +157,31 @@ impl ToTokens for Rpc {
                 }
                 ReturnType::Simple(_) => {
                     quote! {
-                    Request::#variant(#(#params),*) => Response::#variant(self.0.#name(#(#params),*).await),
+                        Request::#variant(#(#params),*) => Response::#variant(self.0.#name(#(#params),*).await),
+                    }
                 }
+                ReturnType::Streaming(_) => {
+                    quote! {}
                 }
-            }
-        });
+            };
+            let streaming_handle = match &method.ret {
+                ReturnType::Nested { .. } | ReturnType::Simple(..) => {
+                    quote! {}
+                }
+                ReturnType::Streaming(_) => {
+                    quote! {
+                        Request::#variant(#(#params),*) => {
+                            let sink = sink.with(async |value| Result::<_, S::Error>::Ok(Response::#variant(value)));
+                            self.0.#name(sink, #(#params),*).await;
+                        },
+                    }
+                }
+            };
+            (handle, streaming_handle)
+        }).unzip();
 
-        let async_client_fns = self.client_fns(true);
-        let blocking_client_fns = self.client_fns(false);
+        let async_client_fns = self.client_fns(true, generics);
+        let blocking_client_fns = self.client_fns(false, generics);
 
         quote! {
             #[allow(unused_imports, reason = "These might not always be used, but they should be available in this module anyway")]
@@ -161,13 +190,16 @@ impl ToTokens for Rpc {
             #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
             mod #module {
                 use super::*;
+                use std::convert::Infallible;
+                use std::marker::PhantomData;
                 use ::trait_rpc::{
-                    Rpc,
-                    client::{AsyncClient, BlockingClient, MappedClient, WrongResponseType},
+                    client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+                    futures::sink::{Sink, SinkExt},
+                    futures::stream::{Stream, StreamExt},
                     serde::{Deserialize, Serialize},
                     server::Handler,
+                    Rpc
                 };
-                use std::marker::PhantomData;
 
                 #(
                     #(#[doc = #docs])*
@@ -204,6 +236,14 @@ impl ToTokens for Rpc {
                     #(#request_variants,)*
                 }
 
+                impl #generics ::trait_rpc::Request for Request #generics {
+                    fn is_streaming_response(&self) -> bool {
+                        match self {
+                            #(#request_streaming),*
+                        }
+                    }
+                }
+
                 #[derive(Debug, Serialize, Deserialize)]
                 #[serde(crate = "::trait_rpc::serde")]
                 #[serde(tag = "method", content = "result")]
@@ -236,6 +276,17 @@ impl ToTokens for Rpc {
                     async fn handle(&self, request: Request #generics) -> Response #generics {
                         match request {
                             #(#handle_arms)*
+                            _ => panic!("This is a streaming method, must call handle_streaming")
+                        }
+                    }
+                    async fn handle_stream_response<S: Sink<Response #generics, Error = Infallible> + Send + 'static>(
+                        &self,
+                        request: Request #generics,
+                        sink: S,
+                    ) {
+                        match request {
+                            #(#stream_handle_arms)*
+                            _ => panic!("This is not a streaming method, must call handle")
                         }
                     }
                 }
@@ -280,7 +331,7 @@ impl ToTokens for Rpc {
 }
 
 impl Rpc {
-    fn client_fns(&self, is_async: bool) -> impl Iterator<Item=TokenStream> {
+    fn client_fns(&self, is_async: bool, generics: &Generics) -> impl Iterator<Item=TokenStream> {
         let await_ = if is_async {
             vec![quote!(.await)]
         } else {
@@ -342,6 +393,31 @@ impl Rpc {
                         fn #to_outer((#(#args,)*): (#(#types,)*), inner: <#nested as Rpc>::Request) -> Request {
                             Request::#variant(#(#args,)*inner)
                         }
+                    }
+                }
+                ReturnType::Streaming(ret) => {
+                    if is_async {
+                        quote! {
+                            #docs
+                            pub async fn #name(&self #(, #params)*) -> Result<impl Stream<Item = Result<#ret, _Client::Error>>, _Client::Error> where _Client: StreamClient<Request #generics, Response #generics> {
+                                let stream = self.0.send_streaming_response(Request::#variant(#(#args),*)).await?;
+                                Ok(
+                                     stream
+                                         .map(|value| {
+                                             match value {
+                                                 Ok(Response::#variant(value)) => Ok(value),
+                                                 Ok(other) => {
+                                                     Err(WrongResponseType::new(#name_str, other.fn_name()).into())
+                                                 }
+                                                 Err(error) => Err(error.into()),
+                                             }
+                                         }),
+
+                                )
+                            }
+                        }
+                    } else {
+                        quote! {}
                     }
                 }
             }

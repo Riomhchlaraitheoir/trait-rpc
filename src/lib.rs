@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 pub use serde;
+pub use futures;
 
 pub mod server;
 pub mod client;
@@ -20,7 +21,7 @@ pub trait Rpc: Sized {
     /// This is the blocking client type used for accessing the RPC service
     type BlockingClient<T: BlockingClient<Self::Request, Self::Response>>;
     /// This is the request type accepted by the service
-    type Request: 'static;
+    type Request: Request + 'static;
     /// This is the response type returned by the service
     type Response: 'static;
 
@@ -34,6 +35,12 @@ pub trait Rpc: Sized {
     fn blocking_client<C>(transport: C) -> Self::BlockingClient<C>
     where
         C: BlockingClient<Self::Request, Self::Response>;
+}
+
+/// Defines a RPC request
+pub trait Request {
+    /// Returns true if this request has a streaming response
+    fn is_streaming_response(&self) -> bool;
 }
 
 #[allow(dead_code, reason = "only using in certain features, but better to leave it open")]

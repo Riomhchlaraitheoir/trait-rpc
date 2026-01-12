@@ -1,6 +1,6 @@
 //! Provides support for the CBOR ([Concise Binary Object Representation](https://cbor.io/)) format
 
-use crate::format::Format;
+use crate::format::{Format, IsFormat};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::error::Error;
@@ -11,13 +11,15 @@ const CONTENT_TYPE: &str = "application/cbor";
 /// [Concise Binary Object Representation](https://cbor.io/)
 pub struct Cbor;
 
-impl<Read, Write> Format<Read, Write> for Cbor
-where Read: DeserializeOwned, Write: Serialize
-{
+impl IsFormat for Cbor {
     fn content_type(&self) -> &'static str {
         CONTENT_TYPE
     }
+}
 
+impl<Read, Write> Format<Read, Write> for Cbor
+where Read: DeserializeOwned, Write: Serialize
+{
     fn read(&self, reader: &[u8]) -> Result<Read, Box<dyn Error + Send>> {
         ciborium::from_reader(reader).map_err(|error| Box::new(error) as Box<dyn Error + Send>)
     }
