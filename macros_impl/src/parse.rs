@@ -10,7 +10,6 @@ pub struct Parser;
 
 #[allow(clippy::unused_self)]
 impl Parser {
-    // TODO: use proc-macro-rules to simplify parsing
     pub fn rpc(&self, input: ItemTrait) -> syn::Result<Rpc> {
         let mut methods = vec![];
         for item in input.items {
