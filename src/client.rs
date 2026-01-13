@@ -3,9 +3,9 @@
 
 use crate::format::Format;
 use bon::bon;
+use futures::{Stream, StreamExt};
 use std::error::Error;
 use std::fmt::Debug;
-use futures::{Stream, StreamExt};
 use thiserror::Error;
 
 /// Implementation for making requests from browser wasm using the Fetch API
@@ -283,6 +283,25 @@ where
         };
         let response = (self.to_inner)(response)?;
         Ok(response)
+    }
+}
+
+impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> StreamClient<InnerReq, InnerResp>
+for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+where
+    Args: Clone,
+    T: StreamClient<OuterReq, OuterResp>,
+{
+    async fn send_streaming_response(&self, request: InnerReq) -> Result<impl Stream<Item=Result<InnerResp, Self::Error>>, Self::Error> {
+        let request = (self.to_outer)(self.args.clone(), request);
+        let stream = self.outer.send_streaming_response(request).await?;
+        Ok(stream.map(|response| -> Result<InnerResp, Self::Error> {
+            let response = match response {
+                Ok(response) => Ok(response),
+                Err(err) => Err(err.into_wrong_response()?),
+            };
+            Ok((self.to_inner)(response)?)
+        }))
     }
 }
 
