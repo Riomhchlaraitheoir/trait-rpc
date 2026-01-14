@@ -5,9 +5,12 @@ use axum::http::Method;
 use futures::future::{Either, ready};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::marker::PhantomData;
 use std::ops::Deref;
+use std::sync::Arc;
+use axum::extract::{FromRequestParts, State};
+use derive_more::Deref;
 use tokio::sync::RwLock;
-use trait_rpc::{RpcWithServer};
 use trait_rpc::format::{cbor::Cbor, json::Json};
 use trait_rpc::server::axum::Axum;
 
@@ -18,7 +21,9 @@ async fn main() {
     let app = Router::new().route_service(
         "/api",
         Axum::builder()
-            .handler(ApiService::handler(Api::default()))
+            .rpc(PhantomData::<ApiService>)
+            .state(Arc::new(ApiState::default()))
+            .server(PhantomData::<Api>)
             .format(&Json)
             .format(&Cbor)
             .method(Method::POST)
@@ -79,10 +84,15 @@ impl User {
 }
 
 #[derive(Default)]
-struct Api {
+struct ApiState {
     users: RwLock<HashMap<u64, User>>,
     tokens: RwLock<HashMap<LoginToken, u64>>,
 }
+
+#[derive(Deref, FromRequestParts)]
+struct Api(State<Arc<ApiState>>);
+
+
 
 impl ApiServiceServer for Api {
     async fn users(&self) -> impl UsersServiceServer {

@@ -1,73 +1,98 @@
 #[allow(unused_imports, reason = "only used if certain features are enabled")]
 use crate::format;
-use crate::format::{IsFormat, Format};
-use crate::{get_request_id, prepend_id, Handler, Rpc};
+use crate::format::{Format, IsFormat};
+use crate::{Handler, Rpc, get_request_id, prepend_id};
+use axum::RequestExt;
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, FromRequest, Request, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Request, WebSocketUpgrade};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::RequestExt;
-use bon::Builder;
 use bon::__::IsUnset;
-use futures::future::BoxFuture;
+use bon::Builder;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::convert::Infallible;
+use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::ops::Deref;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use tower::Service;
-use tracing::{debug, info, info_span, Instrument};
+use tracing::{Instrument, debug, info, info_span};
+use crate::server::axum::axum_builder::{SetRpc, SetServer};
+use crate::server::IntoHandler;
 
 /// A service which serves an RPC service in multiple formats as part of an axum server
 #[derive(Builder)]
-pub struct Axum<H>
+pub struct Axum<R, Server, State>
 where
-    H: Handler + Send + Sync + 'static,
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static
 {
     #[builder(field)]
     methods: Vec<Method>,
     #[builder(field)]
-    formats: Formats<H::Rpc>,
-    #[builder(setters(name = arc_service, vis = "pub(crate)"))]
-    handler: Arc<H>,
+    formats: Formats<R>,
+    #[builder(setters(name = rpc_type, vis = "pub(crate)"))]
+    rpc: PhantomData<fn() -> R>,
+    #[builder(setters(name = server_type, vis = "pub(crate)"))]
+    server: PhantomData<fn() -> Server>,
+    state: State,
     #[builder(default)]
     enable_websockets: bool,
 }
 
-impl<H> Clone for Axum<H>
+impl<R, Server, State> Clone for Axum<R, Server, State>
 where
-    H: Handler + Send + Sync + 'static,
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static
 {
     fn clone(&self) -> Self {
         Self {
             methods: self.methods.clone(),
             formats: self.formats.clone(),
-            handler: self.handler.clone(),
+            rpc: PhantomData,
+            server: PhantomData,
+            state: self.state.clone(),
             enable_websockets: self.enable_websockets,
         }
     }
 }
 
-impl<H, State> AxumBuilder<H, State>
+impl<R, Server, State, BuildState> AxumBuilder<R, Server, State, BuildState>
 where
-    H: Handler + Send + Sync + 'static,
-    State: axum_builder::State,
+    BuildState: axum_builder::State,
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static
 {
-    /// the server handler to server requests with, Handler should be implemented for `&S`
-    pub fn handler(self, service: H) -> AxumBuilder<H, axum_builder::SetHandler<State>>
-    where
-        State::Handler: IsUnset,
+    /// Define the Rpc type
+    ///
+    /// This method exits so that the generic arg can be defined without having to define the other args
+    pub fn rpc(self, _: PhantomData<R>) -> AxumBuilder<R, Server, State, SetRpc<BuildState>>
+    where BuildState::Rpc: IsUnset
     {
-        self.arc_service(Arc::new(service))
+        self.rpc_type(PhantomData)
+    }
+
+    /// Define the Server type
+    ///
+    /// This method exits so that the generic arg can be defined without having to define the other args
+    pub fn server(self, _: PhantomData<Server>) -> AxumBuilder<R, Server, State, SetServer<BuildState>>
+    where BuildState::Server: IsUnset
+    {
+        self.server_type(PhantomData)
     }
 
     /// Add a format to support
     pub fn format(
         mut self,
-        format: &'static impl for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
+        format: &'static impl for<'a> Format<RpcRequest<R>, RpcResponse<R>>,
     ) -> Self {
         self.formats.push(format);
         self
@@ -83,7 +108,7 @@ where
     #[cfg(feature = "json")]
     pub fn allow_json(self) -> Self
     where
-        format::json::Json: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
+        format::json::Json: for<'a> Format<RpcRequest<R>, RpcResponse<R>>,
     {
         self.format(&format::json::Json)
     }
@@ -92,7 +117,7 @@ where
     #[cfg(feature = "cbor")]
     pub fn allow_cbor(self) -> Self
     where
-        format::cbor::Cbor: for<'a> Format<RpcRequest<H>, RpcResponse<H>>,
+        format::cbor::Cbor: for<'a> Format<RpcRequest<R>, RpcResponse<R>>,
     {
         self.format(&format::cbor::Cbor)
     }
@@ -115,15 +140,17 @@ where
 
 type Formats<R> = Vec<&'static dyn Format<<R as Rpc>::Request, <R as Rpc>::Response>>;
 type RpcFormat<H> = &'static dyn Format<RpcRequest<H>, RpcResponse<H>>;
-type RpcRequest<H> = <HandlerRpc<H> as Rpc>::Request;
-type RpcResponse<H> = <HandlerRpc<H> as Rpc>::Response;
-type HandlerRpc<H> = <H as Handler>::Rpc;
+type RpcRequest<R> = <R as Rpc>::Request;
+type RpcResponse<R> = <R as Rpc>::Response;
 
-impl<H> Service<Request> for Axum<H>
+impl<R, Server, State> Service<Request> for Axum<R, Server, State>
 where
-    H: Handler + Send + Sync + 'static,
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static
 {
-    type Response = Result<Response, Error>;
+    type Response = Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>;
     type Error = Infallible;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -136,23 +163,32 @@ where
     }
 }
 
-impl<H> Axum<H>
+impl<R, Server, State> Axum<R, Server, State>
 where
-    H: Handler + Send + Sync + 'static,
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static
 {
     fn call_internal(
         &self,
         mut req: Request,
-    ) -> impl Future<Output = Result<Response, Error>> + Send + 'static {
+    ) -> impl Future<Output = Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>> + Send + 'static {
         let methods = self.methods.clone();
         let formats = self.formats.clone();
-        let handler = self.handler.clone();
+        let state = self.state.clone();
         async move {
+            let server: Server = req.extract_parts_with_state(&state).await.map_err(Error::LoadServer)?;
+            let handler = server.into_handler();
             if let Ok(mut ws) = req.extract_parts::<WebSocketUpgrade>().await
                 && let Ok(ConnectInfo(addr)) = req.extract_parts::<ConnectInfo<SocketAddr>>().await
             {
                 println!("Upgrading to websocket at {addr}");
-                let protocols: Vec<_> = formats.iter().copied().map(IsFormat::content_type).collect();
+                let protocols: Vec<_> = formats
+                    .iter()
+                    .copied()
+                    .map(IsFormat::content_type)
+                    .collect();
                 ws = ws.protocols(protocols.clone());
                 let protocol = ws
                     .selected_protocol()
@@ -161,7 +197,7 @@ where
                     .iter()
                     .find(|format| format.content_type() == protocol)
                     .ok_or(Error::UnsupportedSubprotocol(protocols))?;
-                let format: RpcFormat<H> = *format;
+                let format: RpcFormat<R> = *format;
                 return Ok(ws.on_upgrade(move |socket|
                     Self::handle_websocket(socket, format, handler).instrument(
                         info_span!(target: "websocket", "Websocket connection", address = addr.to_string())
@@ -189,7 +225,7 @@ where
             let request = format
                 .read(&bytes)
                 .map_err(|error| Error::Deserialise(error.to_string()))?;
-            let response = handler.deref().handle(request).await;
+            let response = handler.handle(request).await;
             let response = format
                 .write(response)
                 .map_err(|error| Error::Serialise(error.to_string()))?;
@@ -204,8 +240,8 @@ where
 
     async fn handle_websocket(
         mut socket: WebSocket,
-        format: &'static dyn Format<RpcRequest<H>, RpcResponse<H>>,
-        handler: Arc<H>,
+        format: &'static dyn Format<RpcRequest<R>, RpcResponse<R>>,
+        handler: <Server as IntoHandler<R>>::Handler,
     ) {
         info!("Started websocket connection");
         if socket
@@ -262,12 +298,12 @@ where
     }
 
     async fn handle_request(
-        format: RpcFormat<H>,
+        format: RpcFormat<R>,
         request: &[u8],
-        handler: &H,
+        handler: &<Server as IntoHandler<R>>::Handler,
     ) -> Result<Vec<u8>, String> {
         let (request_id, request) = get_request_id(request);
-        let request: RpcRequest<H> = format
+        let request: RpcRequest<R> = format
             .read(request)
             .map_err(|error| format!("Failed to parse request: {error}"))?;
         let response = handler.handle(request).await;
@@ -280,7 +316,7 @@ where
 }
 
 /// An Error which may occur when handling RPC requests
-pub enum Error {
+pub enum Error<Server> {
     /// The wrong HTTP method was used
     WrongMethod,
     /// There was no Content-Type Header
@@ -295,9 +331,11 @@ pub enum Error {
     Serialise(String),
     /// An internal error occurred while processing the request
     Internal(String),
+    /// A rejection when getting the server from the request
+    LoadServer(Server),
 }
 
-impl IntoResponse for Error {
+impl<Server: IntoResponse> IntoResponse for Error<Server> {
     fn into_response(self) -> Response {
         match self {
             Self::WrongMethod => (
@@ -334,6 +372,7 @@ impl IntoResponse for Error {
             )
                 .into_response(),
             Self::Internal(error) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+            Self::LoadServer(error) => error.into_response(),
         }
     }
 }
