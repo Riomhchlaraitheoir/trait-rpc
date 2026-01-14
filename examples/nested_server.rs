@@ -1,3 +1,5 @@
+#![allow(refining_impl_trait_internal)]
+
 use axum::Router;
 use axum::http::Method;
 use futures::future::{Either, ready};
@@ -5,7 +7,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::Deref;
 use tokio::sync::RwLock;
-use trait_rpc::Handler;
+use trait_rpc::{RpcWithServer};
 use trait_rpc::format::{cbor::Cbor, json::Json};
 use trait_rpc::server::axum::Axum;
 
@@ -16,7 +18,7 @@ async fn main() {
     let app = Router::new().route_service(
         "/api",
         Axum::builder()
-            .handler(ApiService::server(Api::default()))
+            .handler(ApiService::handler(Api::default()))
             .format(&Json)
             .format(&Cbor)
             .method(Method::POST)
@@ -83,8 +85,8 @@ struct Api {
 }
 
 impl ApiServiceServer for Api {
-    async fn users(&self) -> impl Handler<Rpc = UsersService> {
-        UsersService::server(Users(self))
+    async fn users(&self) -> impl UsersServiceServer {
+        Users(self)
     }
 
     async fn login(&self, username: String, password: String) -> Option<LoginToken> {
@@ -130,25 +132,23 @@ impl UsersServiceServer for Users<'_> {
         self.users.read().await.values().cloned().collect()
     }
 
-    async fn by_id(&self, user_id: u64) -> impl Handler<Rpc = UserService> {
-        UserService::server(UserServer {
+    async fn by_id(&self, user_id: u64) -> impl UserServiceServer {
+        UserServer {
             api: self.0,
             user_id,
-        })
+        }
     }
 
-    async fn current(&self, token: LoginToken) -> impl Handler<Rpc = UserService> {
-        UserService::server(
-            self.tokens
-                .read()
-                .await
-                .get(&token)
-                .map(|&user_id| UserServer {
-                    api: self.0,
-                    user_id,
-                })
-                .ok_or(UserNotFound),
-        )
+    async fn current(&self, token: LoginToken) -> impl UserServiceServer {
+        self.tokens
+            .read()
+            .await
+            .get(&token)
+            .map(|&user_id| UserServer {
+                api: self.0,
+                user_id,
+            })
+            .ok_or(UserNotFound)
     }
 }
 

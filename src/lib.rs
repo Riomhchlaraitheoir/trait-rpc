@@ -37,6 +37,14 @@ pub trait Rpc: Sized {
         C: BlockingClient<Self::Request, Self::Response>;
 }
 
+/// Represents a [Rpc] which can be served by `Server`
+pub trait RpcWithServer<Server>: Rpc {
+    /// The handler type for this server
+    type Handler: Handler<Rpc = Self>;
+    /// Create a new handler from the given server
+    fn handler(server: Server) -> Self::Handler;
+}
+
 /// Defines a RPC request
 pub trait Request {
     /// Returns true if this request has a streaming response

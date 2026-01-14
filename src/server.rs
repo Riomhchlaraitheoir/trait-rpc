@@ -1,8 +1,8 @@
 //! Contains modules for individual server implementations
 
-use std::convert::Infallible;
+use crate::{Rpc, RpcWithServer};
 use futures::Sink;
-use crate::Rpc;
+use std::convert::Infallible;
 
 /// Helpers for serving a service from an axum server
 #[cfg(feature = "axum")]
@@ -26,4 +26,19 @@ pub trait Handler: Send {
         request: <Self::Rpc as Rpc>::Request,
         sink: S,
     ) -> impl Future<Output = ()> + Send;
+}
+
+/// This trait represents a server implementor which can be converted to a handler for the rpc `R`
+pub trait IntoHandler<R: Rpc> {
+    /// The handler type that this server can construct
+    type Handler: Handler<Rpc = R>;
+    /// Create a [Handler] from this server
+    fn into_handler(self) -> Self::Handler;
+}
+
+impl<Server, R: RpcWithServer<Server>> IntoHandler<R> for Server {
+    type Handler = R::Handler;
+    fn into_handler(self) -> Self::Handler {
+        R::handler(self)
+    }
 }

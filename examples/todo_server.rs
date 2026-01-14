@@ -3,6 +3,7 @@
 use std::ops::Deref;
 use tokio::sync::RwLock;
 use trait_rpc::server::axum::Axum;
+use trait_rpc::RpcWithServer;
 
 include!("traits/todo.rs");
 
@@ -30,7 +31,7 @@ async fn main() {
     let app = axum::Router::new()
         .route_service("/api/todo",
                Axum::builder()
-                   .handler(TodoService::server(Todos::default()))
+                   .handler(TodoService::handler(Todos::default()))
                    .allow_json()
                    .allow_post()
                    .allow_put()

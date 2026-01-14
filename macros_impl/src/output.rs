@@ -131,7 +131,7 @@ impl ToTokens for Rpc {
                 ReturnType::Nested { service: path } => {
                     quote! {
                         #docs
-                        fn #name(&self #(,#params)*) -> impl Future<Output = impl Handler<Rpc = #path>> + Send;
+                        fn #name(&self #(,#params)*) -> impl Future<Output = impl IntoHandler<#path>> + Send;
                     }
                 }
                 ReturnType::Streaming(ret) => {
@@ -150,7 +150,7 @@ impl ToTokens for Rpc {
                 ReturnType::Nested { service: _ } => {
                     quote! {
                         Request::#variant(#(#params, )*request) => {
-                            let response = self.0.#name(#(#params),*).await.handle(request).await;
+                            let response = self.0.#name(#(#params),*).await.into_handler().handle(request).await;
                             Response::#variant(response)
                         },
                     }
@@ -197,8 +197,8 @@ impl ToTokens for Rpc {
                     futures::sink::{Sink, SinkExt},
                     futures::stream::{Stream, StreamExt},
                     serde::{Deserialize, Serialize},
-                    server::Handler,
-                    Rpc
+                    server::{Handler, IntoHandler},
+                    Rpc, RpcWithServer
                 };
 
                 #(
@@ -221,9 +221,9 @@ impl ToTokens for Rpc {
                     }
                 }
 
-                impl<#(#gen_params: Send + 'static),*> #service #generics {
-                    /// Create a new [Handler](trait_rpc::Handler) for the service
-                    pub fn server(server: impl #server #generics) -> impl Handler<Rpc = Self> {
+                impl<Server: #server #generics #(, #gen_params: Send + 'static)*> RpcWithServer<Server> for #service #generics {
+                    type Handler = #handler<Server #(, #gen_params)*>;
+                    fn handler(server: Server) -> Self::Handler {
                         #handler(server, #phantom_data_new)
                     }
                 }

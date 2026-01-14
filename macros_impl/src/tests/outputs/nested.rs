@@ -13,8 +13,8 @@ mod api_service {
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
-        server::Handler,
-        Rpc
+        server::{Handler, IntoHandler},
+        Rpc, RpcWithServer
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct ApiService;
@@ -36,12 +36,14 @@ mod api_service {
             ApiServiceBlockingClient(transport)
         }
     }
-    impl ApiService {
-        /// Create a new [Handler](trait_rpc::Handler) for the service
-        pub fn server(server: impl ApiServiceServer) -> impl Handler<Rpc = Self> {
+
+    impl<Server: ApiServiceServer> RpcWithServer<Server> for ApiService {
+        type Handler = ApiServiceHandler<Server>;
+        fn handler(server: Server) -> Self::Handler {
             ApiServiceHandler(server)
         }
     }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
     #[serde(tag = "method", content = "args")]
@@ -79,7 +81,7 @@ mod api_service {
 
     /// This is the trait which is used by the server side in order to serve the client
     pub trait ApiServiceServer: Send + Sync {
-        fn users(&self) -> impl Future<Output = impl Handler<Rpc = UsersService>> + Send;
+        fn users(&self) -> impl Future<Output = impl IntoHandler<UsersService>> + Send;
         fn login(
             &self,
             username: String,
@@ -94,7 +96,7 @@ mod api_service {
         async fn handle(&self, request: Request) -> Response {
             match request {
                 Request::Users(request) => {
-                    let response = self.0.users().await.handle(request).await;
+                    let response = self.0.users().await.into_handler().handle(request).await;
                     Response::Users(response)
                 }
                 Request::Login(username, password) => {
@@ -232,8 +234,8 @@ mod users_service {
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
-        server::Handler,
-        Rpc
+        server::{Handler, IntoHandler},
+        Rpc, RpcWithServer
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UsersService;
@@ -255,12 +257,14 @@ mod users_service {
             UsersServiceBlockingClient(transport)
         }
     }
-    impl UsersService {
-        /// Create a new [Handler](trait_rpc::Handler) for the service
-        pub fn server(server: impl UsersServiceServer) -> impl Handler<Rpc = Self> {
+
+    impl<Server: UsersServiceServer> RpcWithServer<Server> for UsersService {
+        type Handler = UsersServiceHandler<Server>;
+        fn handler(server: Server) -> Self::Handler {
             UsersServiceHandler(server)
         }
     }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
     #[serde(tag = "method", content = "args")]
@@ -312,11 +316,11 @@ mod users_service {
         fn new(&self, user: NewUser) -> impl Future<Output = User> + Send;
         fn list(&self) -> impl Future<Output = Vec<User>> + Send;
         fn by_id(&self, id: u64)
-        -> impl Future<Output = impl Handler<Rpc = UserService>> + Send;
+        -> impl Future<Output = impl IntoHandler<UserService>> + Send;
         fn current(
             &self,
             token: LoginToken,
-        ) -> impl Future<Output = impl Handler<Rpc = UserService>> + Send;
+        ) -> impl Future<Output = impl IntoHandler<UserService>> + Send;
     }
     /// A [Handler](Handler) which handles requests/responses for a given service
     #[derive(Debug, Clone)]
@@ -328,11 +332,20 @@ mod users_service {
                 Request::New(user) => Response::New(self.0.new(user).await),
                 Request::List() => Response::List(self.0.list().await),
                 Request::ById(id, request) => {
-                    let response = self.0.by_id(id).await.handle(request).await;
+                    let response = self.0
+                        .by_id(id)
+                        .await
+                        .into_handler()
+                        .handle(request)
+                        .await;
                     Response::ById(response)
                 }
                 Request::Current(token, request) => {
-                    let response = self.0.current(token).await.handle(request).await;
+                    let response = self.0.current(token)
+                        .await
+                        .into_handler()
+                        .handle(request)
+                        .await;
                     Response::Current(response)
                 },
                 _ => panic!("This is a streaming method, must call handle_streaming"),
@@ -543,8 +556,8 @@ mod user_service {
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
-        server::Handler,
-        Rpc
+        server::{Handler, IntoHandler},
+        Rpc, RpcWithServer
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UserService;
@@ -566,12 +579,14 @@ mod user_service {
             UserServiceBlockingClient(transport)
         }
     }
-    impl UserService {
-        /// Create a new [Handler](trait_rpc::Handler) for the service
-        pub fn server(server: impl UserServiceServer) -> impl Handler<Rpc = Self> {
+
+    impl<Server: UserServiceServer> RpcWithServer<Server> for UserService {
+        type Handler = UserServiceHandler<Server>;
+        fn handler(server: Server) -> Self::Handler {
             UserServiceHandler(server)
         }
     }
+
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
     #[serde(tag = "method", content = "args")]

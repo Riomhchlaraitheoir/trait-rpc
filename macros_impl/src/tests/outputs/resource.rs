@@ -10,8 +10,8 @@ mod resources {
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
-        server::Handler,
-        Rpc
+        server::{Handler, IntoHandler},
+        Rpc, RpcWithServer
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct Resources<T>(PhantomData<fn() -> (T,)>);
@@ -36,9 +36,10 @@ mod resources {
             ResourcesBlockingClient(transport, PhantomData::<fn() -> (T,)>)
         }
     }
-    impl<T: Send + 'static> Resources<T> {
-        /// Create a new [Handler](trait_rpc::Handler) for the service
-        pub fn server(server: impl ResourcesServer<T>) -> impl Handler<Rpc=Self> {
+
+    impl<Server: ResourcesServer<T>, T: Send + 'static> RpcWithServer<Server> for Resources<T> {
+        type Handler = ResourcesHandler<Server, T>;
+        fn handler(server: Server) -> Self::Handler {
             ResourcesHandler(server, PhantomData::<fn() -> (T,)>)
         }
     }

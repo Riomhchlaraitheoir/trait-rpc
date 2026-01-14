@@ -7,6 +7,7 @@ use std::pin::pin;
 use futures::{Sink, SinkExt};
 use tokio::sync::{broadcast, RwLock};
 use tokio::sync::broadcast::error::RecvError;
+use trait_rpc::RpcWithServer;
 use trait_rpc::server::axum::Axum;
 
 include!("traits/resources.rs");
@@ -16,7 +17,7 @@ async fn main() {
     let app = Router::new()
         .route_service("/api/books", 
                Axum::builder()
-                   .handler(Resources::server(ResourceServer::<Book>::default()))
+                   .handler(Resources::handler(ResourceServer::<Book>::default()))
                    .allow_json()
                    .allow_cbor()
                    .allow_post()
@@ -25,7 +26,7 @@ async fn main() {
         )
         .route_service("/api/authors",
                Axum::builder()
-                   .handler(Resources::server(ResourceServer::<Author>::default()))
+                   .handler(Resources::handler(ResourceServer::<Author>::default()))
                    .allow_json()
                    .allow_cbor()
                    .allow_post()

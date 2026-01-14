@@ -19,8 +19,8 @@ mod todo_service {
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
-        server::Handler,
-        Rpc
+        server::{Handler, IntoHandler},
+        Rpc, RpcWithServer
     };
 
     /// A service for managing to-do items
@@ -47,9 +47,9 @@ mod todo_service {
         }
     }
 
-    impl TodoService {
-        /// Create a new [Handler](trait_rpc::Handler) for the service
-        pub fn server(server: impl TodoServiceServer) -> impl Handler<Rpc = Self> {
+    impl<Server: TodoServiceServer> RpcWithServer<Server> for TodoService {
+        type Handler = TodoServiceHandler<Server>;
+        fn handler(server: Server) -> Self::Handler {
             TodoServiceHandler(server)
         }
     }
