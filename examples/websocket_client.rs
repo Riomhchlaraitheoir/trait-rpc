@@ -6,13 +6,25 @@ use trait_rpc::format::json::Json;
 
 include!("traits/todo.rs");
 
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
+    run().await;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use wasm_bindgen_futures::spawn_local;
+    spawn_local(run());
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(clippy::future_not_send))]
+async fn run() {
     let client = TodoService::async_client(
         client::builder()
             .non_blocking()
             .transport(
-                Websocket::new("ws://127.0.0.1:8080".parse().unwrap(), Json).await.expect("failed to start connection")
+                Websocket::new("ws://127.0.0.1:8080", Json).await.expect("failed to start connection")
             )
             .format(Json)
             .build()

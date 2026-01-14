@@ -30,7 +30,8 @@ websocket-client = ["dep:tokio-tungstenite", "dep:tokio", "dep:web-sys", "dep:wa
 json = ["dep:serde_json"]
 browser-json = ["dep:serde-wasm-bindgen", "dep:web-sys", "dep:wasm-bindgen-futures"]
 cbor = ["dep:ciborium"]
-__examples_tokio = ["dep:tokio"]
+__test = ["axum", "reqwest", "reqwest-blocking", "json", "cbor", "websocket-client", "dep:tokio"]
+__wasm_test = ["reqwest", "json", "cbor", "browser", "browser-json", "websocket-client"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -67,11 +68,10 @@ axum-extra = { version = "0.12.5", features = ["typed-header"] }
 
 [[example]]
 name = "todo_client"
-required-features = ["reqwest", "__examples_tokio"]
+required-features = ["reqwest", "__test"]
 
 [[example]]
 name = "websocket_client"
-required-features = ["reqwest", "__examples_tokio", "websocket-client"]
 
 [[example]]
 name = "blocking_client"
@@ -79,7 +79,7 @@ required-features = ["reqwest-blocking"]
 
 [[example]]
 name = "nested_client"
-required-features = ["reqwest", "__examples_tokio"]
+required-features = ["reqwest", "__test"]
 
 [[example]]
 name = "wasm_client"

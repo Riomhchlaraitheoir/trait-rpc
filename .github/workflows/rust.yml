@@ -33,9 +33,9 @@ jobs:
     - name: Run tests for macros
       run: cargo test --all-targets --package trait-rpc-macros-impl
     - name: Run Clippy
-      run: cargo clippy --all-targets --features axum,reqwest,reqwest-blocking,json,cbor,__examples_tokio,websocket-client -- -Dwarnings
+      run: cargo clippy --all-targets --features __test -- -Dwarnings
     - name: Run Clippy for WASM target
-      run: cargo clippy --all-targets --features reqwest,json,cbor,browser,browser-json,wasm-websocket --target wasm32-unknown-unknown -- -Dwarnings
+      run: cargo clippy --all-targets --features __wasm_test --target wasm32-unknown-unknown -- -Dwarnings
     - name: Run tests
-      run: cargo test --all-targets --verbose --features axum,reqwest,reqwest-blocking,json,cbor,__examples_tokio,websocket-client
+      run: cargo test --all-targets --verbose --features __test
       

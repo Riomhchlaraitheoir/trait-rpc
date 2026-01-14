@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::http::Uri;
 use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Error as WsError, Message};
 use tracing::{error, warn};
 use crate::format::IsFormat;
@@ -49,9 +48,9 @@ impl Websocket {
     ///
     /// # Panics
     /// Certain unexpected edge cases that cannot be proven safe with the type system may cause a panic
-    pub async fn new(url: Uri, format: impl IsFormat) -> Result<Self, WsError> {
+    pub async fn new(url: impl AsRef<str>, format: impl IsFormat) -> Result<Self, WsError> {
         let (mut stream, _) =
-            connect_async(ClientRequestBuilder::new(url).with_sub_protocol(format.content_type()))
+            connect_async(ClientRequestBuilder::new(url.as_ref().parse().expect("failed to parse url")).with_sub_protocol(format.content_type()))
                 .await?;
         let (sender, mut request_receiver) = mpsc::channel(100);
         let sender = Arc::new(Mutex::new(sender));

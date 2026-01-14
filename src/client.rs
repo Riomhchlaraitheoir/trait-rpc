@@ -19,10 +19,16 @@ pub mod reqwest;
 /// Implementation for making requests using the reqwest crate
 #[cfg(all(feature = "reqwest-blocking", not(target_arch = "wasm32")))]
 pub mod reqwest_blocking;
+
 #[cfg(all(feature = "websocket-client", not(target_arch = "wasm32")))]
-pub mod websocket;
+pub mod tokio_websocket;
+#[cfg(all(feature = "websocket-client", not(target_arch = "wasm32")))]
+pub use tokio_websocket as websocket;
+
 #[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
 pub mod wasm_websocket;
+#[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
+pub use wasm_websocket as websocket;
 
 #[cfg(all(feature = "reqwest-blocking", target_arch = "wasm32"))]
 compile_error!("reqwest-blocking feature is not available for wasm32 target arch");
