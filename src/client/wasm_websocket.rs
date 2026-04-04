@@ -7,6 +7,7 @@ use futures::{Sink, SinkExt, StreamExt};
 use tracing::error;
 use wasm_bindgen_futures::spawn_local;
 use ws_stream_wasm::{WsErr, WsMessage, WsMeta, WsStream};
+pub use ws_stream_wasm::WsErr as WebsocketError;
 
 /// Create a new websocket transport layer to the given URL
 ///

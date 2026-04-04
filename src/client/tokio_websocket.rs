@@ -5,7 +5,8 @@ use crate::stream::client::StreamClient;
 use futures::{SinkExt, StreamExt};
 use futures::channel::mpsc::unbounded;
 use futures::future::{select, Either};
-use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Error as WsError, Error, Message};
+use tokio_tungstenite::tungstenite::{ClientRequestBuilder, Error, Message};
+pub use tokio_tungstenite::tungstenite::Error as WebsocketError;
 use tokio_tungstenite::{connect_async};
 use tracing::{error, info, info_span, Instrument};
 use std::pin::pin;
@@ -21,7 +22,7 @@ use std::pin::pin;
 pub async fn new_websocket_transport(
     url: impl AsRef<str>,
     format: impl IsFormat + 'static,
-) -> Result<StreamClient, WsError> {
+) -> Result<StreamClient, WebsocketError> {
     let (mut websocket, _) = connect_async(
         ClientRequestBuilder::new(url.as_ref().parse().expect("failed to parse url"))
             .with_sub_protocol(format.content_type()),
