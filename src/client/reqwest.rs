@@ -3,7 +3,7 @@
 use bon::bon;
 use crate::AsyncTransport;
 pub use reqwest::Error;
-use crate::client::ResponseError;
+use crate::client::HandleError;
 
 /// An [`AsyncTransport`] which uses the [reqwest] crate
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl Reqwest {
 impl AsyncTransport for Reqwest {
     type Error = Error;
 
-    async fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+    async fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, HandleError>, Self::Error> {
         let response = self
             .client
             .request(self.method.clone(), &self.url)
@@ -46,13 +46,13 @@ impl AsyncTransport for Reqwest {
             .send()
             .await?;
         if response.status().is_success() {
-            Ok(Ok(response.json().await?))
+            Ok(Ok(response.bytes().await?.to_vec()))
         } else if response.status().is_client_error() {
-            Ok(Err(ResponseError::BadRequest(response.text().await?)))
+            Ok(Err(HandleError::BadRequest(response.text().await?)))
         } else if response.status().is_server_error() {
-            Ok(Err(ResponseError::InternalServerError(response.text().await?)))
+            Ok(Err(HandleError::InternalServerError(response.text().await?)))
         } else {
-            Ok(Err(ResponseError::Unexpected))
+            Ok(Err(HandleError::Unexpected))
         }
     }
 }

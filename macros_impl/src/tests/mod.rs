@@ -1,4 +1,4 @@
-use crate::rpc;
+use crate::{rpc, Args};
 use proc_macro2::TokenStream;
 use quote::{format_ident, ToTokens};
 use syn::parse::{Parse, Parser};
@@ -38,6 +38,7 @@ fn test_case(input: &'static str, expected: &'static str) {
                     }
                 };
                 item.attrs = item.attrs.into_iter().skip(1).collect();
+                let args: Args = syn::parse2(args).expect("Failed to parse args");
                 match rpc(args, item) {
                     Ok(tokens) => tokens.into_token_stream(),
                     Err(err) => err.into_compile_error(),

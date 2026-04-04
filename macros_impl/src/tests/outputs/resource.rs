@@ -2,6 +2,7 @@
 pub use resources::{Resources, ResourcesAsyncClient, ResourcesBlockingClient, ResourcesServer};
 #[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
 mod resources {
+    use std::borrow::Cow;
     use super::*;
     use std::convert::Infallible;
     use std::marker::PhantomData;
@@ -11,13 +12,14 @@ mod resources {
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::{Handler, IntoHandler},
-        Rpc, RpcWithServer
+        Rpc, RpcWithServer,
+        server::StreamError
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct Resources<T>(PhantomData<fn() -> (T,)>);
     impl<T> Rpc for Resources<T>
     where
-        T: Send + 'static,
+        T: Debug + Send + 'static,
     {
         type AsyncClient<_Client: AsyncClient<Self::Request, Self::Response>> =
             ResourcesAsyncClient<_Client, T>;
@@ -35,9 +37,12 @@ mod resources {
         ) -> ResourcesBlockingClient<_Client, T> {
             ResourcesBlockingClient(transport, PhantomData::<fn() -> (T,)>)
         }
+        fn service_name() -> &'static str {
+            stringify!(Resources)
+        }
     }
 
-    impl<Server: ResourcesServer<T>, T: Send + 'static> RpcWithServer<Server> for Resources<T> {
+    impl<Server: ResourcesServer<T>, T: Debug + Send + 'static> RpcWithServer<Server> for Resources<T> {
         type Handler = ResourcesHandler<Server, T>;
         fn handler(server: Server) -> Self::Handler {
             ResourcesHandler(server, PhantomData::<fn() -> (T,)>)
@@ -63,6 +68,15 @@ mod resources {
                 Self::List(..) => false,
                 Self::Get(..) => false,
                 Self::New(..) => false,
+            }
+        }
+
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                Self::Subscribe(..) => Cow::Borrowed("subscribe"),
+                Self::List(..) => Cow::Borrowed("list"),
+                Self::Get(..) => Cow::Borrowed("get"),
+                Self::New(..) => Cow::Borrowed("new"),
             }
         }
     }
@@ -92,7 +106,11 @@ mod resources {
     }
     /// This is the trait which is used by the server side in order to serve the client
     pub trait ResourcesServer<T>: Send + Sync {
-        fn subscribe(&self, sink: impl Sink<T, Error = Infallible> + Send + 'static) -> impl Future<Output = ()> + Send;
+        ///
+        /// This function runs for the entire lifetime of the stream, the stream to the client is ended when this function returns
+        ///
+        /// This function *must* not block, doing so may block other request handling, if you need to run blocking code, spawn a task and await it
+        fn subscribe<'a>(&'a self, sink: impl Sink<T, Error = StreamError> + Send + 'a) -> impl Future<Output = ()> + Send;
         fn list(&self) -> impl Future<Output = Vec<T>> + Send;
         fn get(&self, id: u64) -> impl Future<Output = Option<T>> + Send;
         fn new(&self, value: T) -> impl Future<Output = ()> + Send;
@@ -100,7 +118,7 @@ mod resources {
     /// A [Handler](Handler) which handles requests/responses for a given service
     #[derive(Debug, Clone)]
     pub struct ResourcesHandler<_Server, T>(_Server, (PhantomData<fn() -> (T,)>));
-    impl<_Server: ResourcesServer<T>, T: Send + 'static> Handler for ResourcesHandler<_Server, T> {
+    impl<_Server: ResourcesServer<T>, T: Debug + Send + 'static> Handler for ResourcesHandler<_Server, T> {
         type Rpc = Resources<T>;
         async fn handle(&self, request: Request<T>) -> Response<T> {
             match request {
@@ -110,7 +128,7 @@ mod resources {
                 _ => panic!("This is a streaming method, must call handle_streaming"),
             }
         }
-        async fn handle_stream_response<S: Sink<Response<T>, Error = Infallible> + Send + 'static>(&self, request: Request<T>, sink: S) {
+        async fn handle_stream_response<'a, S: Sink<Response<T>, Error = StreamError> + Send + 'a>(&'a self, request: Request<T>, sink: S) {
             match request {
                 Request::Subscribe() => {
                     let sink = sink.with(async |value| Result::<_, S::Error>::Ok(Response::Subscribe(value)));

@@ -1,4 +1,4 @@
-use crate::{Method, Rpc};
+use crate::{Args, Method, Rpc};
 use syn::{
     Attribute, Expr, FnArg, GenericArgument, ItemTrait, Meta, MetaNameValue, PathArguments,
     PathSegment, ReturnType, TraitItem, TraitItemFn, Type, TypeParamBound, TypePath, parse_quote,
@@ -10,7 +10,7 @@ pub struct Parser;
 
 #[allow(clippy::unused_self)]
 impl Parser {
-    pub fn rpc(&self, input: ItemTrait) -> syn::Result<Rpc> {
+    pub fn rpc(&self, input: ItemTrait, args: Args) -> syn::Result<Rpc> {
         let mut methods = vec![];
         for item in input.items {
             if let TraitItem::Fn(item) = item {
@@ -25,6 +25,7 @@ impl Parser {
         }
         let docs = input.attrs.iter().filter_map(docs).collect();
         Ok(Rpc {
+            args,
             docs,
             vis: input.vis,
             generics: input.generics,

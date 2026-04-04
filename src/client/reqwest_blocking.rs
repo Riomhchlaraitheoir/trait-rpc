@@ -3,7 +3,7 @@ use crate::BlockingTransport;
 pub use reqwest::Error;
 use reqwest::blocking::Client;
 use reqwest::{Method};
-use crate::client::ResponseError;
+use crate::client::HandleError;
 
 /// A [`AsyncTransport`] which uses the [reqwest] crate
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl ReqwestBlocking {
 impl BlockingTransport for ReqwestBlocking {
     type Error = Error;
 
-    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error> {
+    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, HandleError>, Self::Error> {
         let response = self
             .client
             .request(self.method.clone(), &self.url)
@@ -44,13 +44,13 @@ impl BlockingTransport for ReqwestBlocking {
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .send()?;
         if response.status().is_success() {
-            Ok(Ok(response.json()?))
+            Ok(Ok(response.bytes()?.to_vec()))
         } else if response.status().is_client_error() {
-            Ok(Err(ResponseError::BadRequest(response.text()?)))
+            Ok(Err(HandleError::BadRequest(response.text()?)))
         } else if response.status().is_server_error() {
-            Ok(Err(ResponseError::InternalServerError(response.text()?)))
+            Ok(Err(HandleError::InternalServerError(response.text()?)))
         } else {
-            Ok(Err(ResponseError::Unexpected))
+            Ok(Err(HandleError::Unexpected))
         }
     }
 }

@@ -1,10 +1,17 @@
-#[allow(unused_imports, reason = "These might not always be used, but they should be available in this module anyway")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but they should be available in this module anyway"
+)]
 pub use api_service::{
     ApiService, ApiServiceAsyncClient, ApiServiceBlockingClient, ApiServiceServer,
 };
 
-#[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but it's easier to include always"
+)]
 mod api_service {
+    use std::borrow::Cow;
     use super::*;
     use std::convert::Infallible;
     use std::marker::PhantomData;
@@ -14,7 +21,8 @@ mod api_service {
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::{Handler, IntoHandler},
-        Rpc, RpcWithServer
+        Rpc, RpcWithServer,
+        server::StreamError
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct ApiService;
@@ -34,6 +42,9 @@ mod api_service {
             transport: _Client,
         ) -> ApiServiceBlockingClient<_Client> {
             ApiServiceBlockingClient(transport)
+        }
+        fn service_name() -> &'static str {
+            stringify!(ApiService)
         }
     }
 
@@ -58,6 +69,17 @@ mod api_service {
             match self {
                 Self::Users(..) => false,
                 Self::Login(..) => false,
+            }
+        }
+
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                Self::Users(.., nested) => {
+                    let mut name = concat!("users", ".").to_string();
+                    name.push_str(nested.name().as_ref());
+                    Cow::Owned(name)
+                }
+                Self::Login(..) => Cow::Borrowed("login"),
             }
         }
     }
@@ -105,8 +127,8 @@ mod api_service {
                 _ => panic!("This is a streaming method, must call handle_streaming"),
             }
         }
-        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
-            &self,
+        async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
+            &'a self,
             request: Request,
             sink: S,
         ) {
@@ -116,8 +138,6 @@ mod api_service {
         }
     }
 
-
-
     /// This is the async client for the service, it produces requests from method calls
     /// (including chained method calls) and sends the requests with the given
     /// [transport](::trait_rpc::AsyncClient) before returning the response
@@ -126,7 +146,7 @@ mod api_service {
     #[derive(Debug, Copy, Clone)]
     pub struct ApiServiceAsyncClient<_Client>(_Client);
     #[allow(clippy::future_not_send)]
-         impl<_Client: AsyncClient<Request, Response>> ApiServiceAsyncClient<_Client> {
+    impl<_Client: AsyncClient<Request, Response>> ApiServiceAsyncClient<_Client> {
         pub fn users(
             &self,
         ) -> <UsersService as Rpc>::AsyncClient<
@@ -220,12 +240,19 @@ mod api_service {
         }
     }
 }
-#[allow(unused_imports, reason = "These might not always be used, but they should be available in this module anyway")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but they should be available in this module anyway"
+)]
 pub use users_service::{
     UsersService, UsersServiceAsyncClient, UsersServiceBlockingClient, UsersServiceServer,
 };
-#[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but it's easier to include always"
+)]
 mod users_service {
+    use std::borrow::Cow;
     use super::*;
     use std::convert::Infallible;
     use std::marker::PhantomData;
@@ -235,7 +262,8 @@ mod users_service {
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::{Handler, IntoHandler},
-        Rpc, RpcWithServer
+        Rpc, RpcWithServer,
+        server::StreamError
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UsersService;
@@ -255,6 +283,9 @@ mod users_service {
             transport: _Client,
         ) -> UsersServiceBlockingClient<_Client> {
             UsersServiceBlockingClient(transport)
+        }
+        fn service_name() -> &'static str {
+            stringify!(UsersService)
         }
     }
 
@@ -287,6 +318,23 @@ mod users_service {
                 Self::Current(..) => false,
             }
         }
+
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                Self::New(..) => Cow::Borrowed("new"),
+                Self::List(..) => Cow::Borrowed("list"),
+                Self::ById(.., nested) => {
+                    let mut name = concat!("by_id", ".").to_string();
+                    name.push_str(nested.name().as_ref());
+                    Cow::Owned(name)
+                },
+                Self::Current(.., nested) => {
+                    let mut name = concat!("current", ".").to_string();
+                    name.push_str(nested.name().as_ref());
+                    Cow::Owned(name)
+                }
+            }
+        }
     }
     #[derive(Debug, Serialize, Deserialize)]
     #[serde(crate = "::trait_rpc::serde")]
@@ -315,8 +363,7 @@ mod users_service {
     pub trait UsersServiceServer: Send + Sync {
         fn new(&self, user: NewUser) -> impl Future<Output = User> + Send;
         fn list(&self) -> impl Future<Output = Vec<User>> + Send;
-        fn by_id(&self, id: u64)
-        -> impl Future<Output = impl IntoHandler<UserService>> + Send;
+        fn by_id(&self, id: u64) -> impl Future<Output = impl IntoHandler<UserService>> + Send;
         fn current(
             &self,
             token: LoginToken,
@@ -332,27 +379,24 @@ mod users_service {
                 Request::New(user) => Response::New(self.0.new(user).await),
                 Request::List() => Response::List(self.0.list().await),
                 Request::ById(id, request) => {
-                    let response = self.0
-                        .by_id(id)
-                        .await
-                        .into_handler()
-                        .handle(request)
-                        .await;
+                    let response = self.0.by_id(id).await.into_handler().handle(request).await;
                     Response::ById(response)
                 }
                 Request::Current(token, request) => {
-                    let response = self.0.current(token)
+                    let response = self
+                        .0
+                        .current(token)
                         .await
                         .into_handler()
                         .handle(request)
                         .await;
                     Response::Current(response)
-                },
+                }
                 _ => panic!("This is a streaming method, must call handle_streaming"),
             }
         }
-        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
-            &self,
+        async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
+            &'a self,
             request: Request,
             sink: S,
         ) {
@@ -362,8 +406,6 @@ mod users_service {
         }
     }
 
-
-
     /// This is the async client for the service, it produces requests from method calls
     /// (including chained method calls) and sends the requests with the given
     /// [transport](::trait_rpc::AsyncClient) before returning the response
@@ -372,7 +414,7 @@ mod users_service {
     #[derive(Debug, Copy, Clone)]
     pub struct UsersServiceAsyncClient<_Client>(_Client);
     #[allow(clippy::future_not_send)]
-         impl<_Client: AsyncClient<Request, Response>> UsersServiceAsyncClient<_Client> {
+    impl<_Client: AsyncClient<Request, Response>> UsersServiceAsyncClient<_Client> {
         pub async fn new(&self, user: NewUser) -> Result<User, _Client::Error> {
             match self.0.send(Request::New(user)).await? {
                 Response::New(value) => Ok(value),
@@ -542,12 +584,19 @@ mod users_service {
         }
     }
 }
-#[allow(unused_imports, reason = "These might not always be used, but they should be available in this module anyway")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but they should be available in this module anyway"
+)]
 pub use user_service::{
     UserService, UserServiceAsyncClient, UserServiceBlockingClient, UserServiceServer,
 };
-#[allow(unused_imports, reason = "These might not always be used, but it's easier to include always")]
+#[allow(
+    unused_imports,
+    reason = "These might not always be used, but it's easier to include always"
+)]
 mod user_service {
+    use std::borrow::Cow;
     use super::*;
     use std::convert::Infallible;
     use std::marker::PhantomData;
@@ -557,7 +606,8 @@ mod user_service {
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::{Handler, IntoHandler},
-        Rpc, RpcWithServer
+        Rpc, RpcWithServer,
+        server::StreamError
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
     pub struct UserService;
@@ -577,6 +627,9 @@ mod user_service {
             transport: _Client,
         ) -> UserServiceBlockingClient<_Client> {
             UserServiceBlockingClient(transport)
+        }
+        fn service_name() -> &'static str {
+            stringify!(UserService)
         }
     }
 
@@ -604,6 +657,14 @@ mod user_service {
                 Self::Get(..) => false,
                 Self::Update(..) => false,
                 Self::Delete(..) => false,
+            }
+        }
+
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                Self::Get(..) => Cow::Borrowed("get"),
+                Self::Update(..) => Cow::Borrowed("update"),
+                Self::Delete(..) => Cow::Borrowed("delete"),
             }
         }
     }
@@ -649,8 +710,8 @@ mod user_service {
                 _ => panic!("This is a streaming method, must call handle_streaming"),
             }
         }
-        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
-            &self,
+        async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
+            &'a self,
             request: Request,
             sink: S,
         ) {
@@ -660,8 +721,6 @@ mod user_service {
         }
     }
 
-
-
     /// This is the async client for the service, it produces requests from method calls
     /// (including chained method calls) and sends the requests with the given
     /// [transport](::trait_rpc::AsyncClient) before returning the response
@@ -670,7 +729,7 @@ mod user_service {
     #[derive(Debug, Copy, Clone)]
     pub struct UserServiceAsyncClient<_Client>(_Client);
     #[allow(clippy::future_not_send)]
-         impl<_Client: AsyncClient<Request, Response>> UserServiceAsyncClient<_Client> {
+    impl<_Client: AsyncClient<Request, Response>> UserServiceAsyncClient<_Client> {
         pub async fn get(&self) -> Result<Result<User, UserNotFound>, _Client::Error> {
             match self.0.send(Request::Get()).await? {
                 Response::Get(value) => Ok(value),

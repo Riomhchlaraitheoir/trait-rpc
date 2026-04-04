@@ -1,7 +1,6 @@
 #![allow(refining_impl_trait_internal)]
 
 use axum::Router;
-use axum::http::Method;
 use futures::future::{Either, ready};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -26,7 +25,6 @@ async fn main() {
             .server(PhantomData::<Api>)
             .format(&Json)
             .format(&Cbor)
-            .method(Method::POST)
             .build(),
     );
 

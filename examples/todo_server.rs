@@ -49,8 +49,6 @@ async fn main() {
                    .server(PhantomData::<Todos>)
                    .state(ServerState::default())
                    .allow_json()
-                   .allow_post()
-                   .allow_put()
                    .build()
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await.unwrap();

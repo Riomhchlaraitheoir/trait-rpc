@@ -1,4 +1,4 @@
-use macros::rpc;
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq)]
 pub struct Book {
@@ -14,7 +14,7 @@ pub struct Author {
     pub quote: String,
 }
 
-#[rpc]
+#[macros::rpc]
 pub trait Resources<T> {
     fn subscribe(&self) -> Stream<T>;
     fn list(&self) -> Vec<T>;

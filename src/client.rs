@@ -189,7 +189,7 @@ pub trait AsyncTransport: Clone {
     /// This is the error type which is returned in the case that some part of the transport failed
     type Error: Error + 'static;
     /// Sends the request and returns the response
-    fn send(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output=Result<Result<Vec<u8>, ResponseError>, Self::Error>>;
+    fn send(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output=Result<Result<Vec<u8>, HandleError>, Self::Error>>;
 }
 
 /// This trait describes the transport layer of a client,
@@ -212,7 +212,7 @@ pub trait BlockingTransport: Clone {
     ///
     /// # Errors
     /// Returns an error in the case that the communication failed for any reason
-    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, ResponseError>, Self::Error>;
+    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, HandleError>, Self::Error>;
 }
 
 /// This trait describes the transport layer of a client,
@@ -226,7 +226,7 @@ pub trait BlockingTransport: Clone {
 /// Naturally a format and protocol the is supported by the server should be chosen
 pub trait StreamTransport: AsyncTransport {
     /// Sends the request and returns the response
-    fn stream_resp(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output = Result<impl Stream<Item=Result<Vec<u8>, Self::Error>>, Self::Error>>;
+    fn stream_resp(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output = Result<impl Stream<Item=Result<Vec<u8>, Self::Error>>, Self::Error>> + Send;
 }
 
 /// This is a transport layer used for nesting services
@@ -287,8 +287,7 @@ where
             Ok(response) => Ok(response),
             Err(err) => Err(err.into_wrong_response()?),
         };
-        let response = (self.to_inner)(response)?;
-        Ok(response)
+        Ok((self.to_inner)(response)?)
     }
 }
 
@@ -337,7 +336,7 @@ pub enum RpcError<T> {
     Transport(#[source] T),
     /// The transport layer returned an error
     #[error("Unexpected response: {0}")]
-    Response(#[from] ResponseError),
+    Response(#[from] HandleError),
     /// Failed to serialize the request
     #[error("Failed to serialize the request: {0}")]
     Serialize(Box<dyn Error + Send>),
@@ -354,7 +353,7 @@ pub enum RpcError<T> {
 
 /// Indicates that the transport was successful, but the response indicated some problem
 #[derive(Debug, Error, Clone)]
-pub enum ResponseError {
+pub enum HandleError {
     /// Request was improperly formatted
     #[error("Request was rejected: {0}")]
     BadRequest(String),

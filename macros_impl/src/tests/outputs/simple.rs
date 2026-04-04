@@ -11,6 +11,7 @@ pub use todo_service::{
     reason = "These might not always be used, but it's easier to include always"
 )]
 mod todo_service {
+    use std::borrow::Cow;
     use super::*;
     use std::convert::Infallible;
     use std::marker::PhantomData;
@@ -20,7 +21,8 @@ mod todo_service {
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
         server::{Handler, IntoHandler},
-        Rpc, RpcWithServer
+        Rpc, RpcWithServer,
+        server::StreamError
     };
 
     /// A service for managing to-do items
@@ -44,6 +46,9 @@ mod todo_service {
             transport: _Client,
         ) -> TodoServiceBlockingClient<_Client> {
             TodoServiceBlockingClient(transport)
+        }
+        fn service_name() -> &'static str {
+            stringify!(TodoService)
         }
     }
 
@@ -71,6 +76,14 @@ mod todo_service {
                 Self::GetTodos(..) => false,
                 Self::GetTodo(..) => false,
                 Self::NewTodo(..) => false,
+            }
+        }
+
+        fn name(&self) -> Cow<'static, str> {
+            match self {
+                Self::GetTodos(..) => Cow::Borrowed("get_todos"),
+                Self::GetTodo(..) => Cow::Borrowed("get_todo"),
+                Self::NewTodo(..) => Cow::Borrowed("new_todo"),
             }
         }
     }
@@ -122,8 +135,8 @@ mod todo_service {
                 _ => panic!("This is a streaming method, must call handle_streaming"),
             }
         }
-        async fn handle_stream_response<S: Sink<Response, Error = Infallible> + Send + 'static>(
-            &self,
+        async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
+            &'a self,
             request: Request,
             sink: S,
         ) {

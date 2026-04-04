@@ -2,7 +2,7 @@
 
 use crate::{Rpc, RpcWithServer};
 use futures::Sink;
-use std::convert::Infallible;
+use thiserror::Error;
 
 /// Helpers for serving a service from an axum server
 #[cfg(feature = "axum")]
@@ -21,11 +21,22 @@ pub trait Handler: Send {
         request: <Self::Rpc as Rpc>::Request,
     ) -> impl Future<Output = <Self::Rpc as Rpc>::Response> + Send;
     /// takes the request and returns a response, see [trait documentation](Self) for details
-    fn handle_stream_response<S: Sink<<Self::Rpc as Rpc>::Response, Error = Infallible> + Send + 'static>(
-        &self,
+    fn handle_stream_response<'a, S: Sink<<Self::Rpc as Rpc>::Response, Error = StreamError> + Send + 'a>(
+        &'a self,
         request: <Self::Rpc as Rpc>::Request,
         sink: S,
     ) -> impl Future<Output = ()> + Send;
+}
+
+#[derive(Debug, Error)]
+/// An error when trying to send a value to a stream
+pub enum StreamError {
+    #[error("The output stream is closed")]
+    /// The stream is closed
+    Closed,
+    #[error("The send failed with an internal error: {0}")]
+    /// The value could not be sent, the contained string is the error message
+    SendFailed(String),
 }
 
 /// This trait represents a server implementor which can be converted to a handler for the rpc `R`

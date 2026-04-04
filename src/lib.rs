@@ -1,12 +1,16 @@
 #![doc = include_str!("../README.md")]
 #![warn(missing_docs)]
 
+use std::borrow::Cow;
+use std::fmt::Debug;
 pub use serde;
 pub use futures;
 
 pub mod server;
 pub mod client;
 pub mod format;
+#[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
+pub mod stream;
 
 pub use macros::rpc;
 pub use crate::client::{AsyncTransport, BlockingTransport, MappedClient, RpcError};
@@ -21,9 +25,9 @@ pub trait Rpc: Sized {
     /// This is the blocking client type used for accessing the RPC service
     type BlockingClient<T: BlockingClient<Self::Request, Self::Response>>;
     /// This is the request type accepted by the service
-    type Request: Request + 'static;
+    type Request: Request + Debug + 'static;
     /// This is the response type returned by the service
-    type Response: 'static;
+    type Response: Debug + 'static;
 
     /// Create a new asynchronous client, using the given underlying transport, if you wish to re-use the
     /// client for multiple calls, ensure you pass a copyable transport (eg: a reference)
@@ -35,6 +39,9 @@ pub trait Rpc: Sized {
     fn blocking_client<C>(transport: C) -> Self::BlockingClient<C>
     where
         C: BlockingClient<Self::Request, Self::Response>;
+
+    /// Returns the name of this service
+    fn service_name() -> &'static str;
 }
 
 /// Represents a [Rpc] which can be served by `Server`
@@ -49,27 +56,6 @@ pub trait RpcWithServer<Server>: Rpc {
 pub trait Request {
     /// Returns true if this request has a streaming response
     fn is_streaming_response(&self) -> bool;
-}
-
-#[allow(dead_code, reason = "only using in certain features, but better to leave it open")]
-/// Build a request/response from a request ID and a payload. Useful for implementing transport
-/// protocols that share a single connection for many concurrent requests
-fn prepend_id(request_id:u32, payload: Vec<u8>) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(payload.len() + 4);
-    bytes.extend(request_id.to_le_bytes());
-    bytes.extend(payload);
-    bytes
-}
-
-#[allow(dead_code, reason = "only using in certain features, but better to leave it open")]
-/// Get request id and payload from the given request/response. Useful for implementing transport
-/// protocols that share a single connection for many concurrent requests
-fn get_request_id(request: &[u8]) -> (u32, &[u8]) {
-    let request_id = u32::from_le_bytes([
-        request[0],
-        request[1],
-        request[2],
-        request[3],
-    ]);
-    (request_id, &request[4..])
+    /// Returns the name of this method (for logging purposes)
+    fn name(&self) -> Cow<'static, str>;
 }

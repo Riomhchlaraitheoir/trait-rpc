@@ -1,26 +1,49 @@
 #[allow(unused_imports, reason = "only used if certain features are enabled")]
 use crate::format;
-use crate::format::{Format, IsFormat};
-use crate::{Handler, Rpc, get_request_id, prepend_id};
-use axum::RequestExt;
+use crate::format::{Format};
+use crate::server::axum::axum_builder::{SetRpc, SetServer};
+use crate::server::{IntoHandler, StreamError};
+#[cfg(feature = "websocket-server")]
+use {
+    crate::{
+        stream::server::serve_request_stream,
+        format::IsFormat
+    },
+    axum::extract::{
+        ws::{Message, WebSocket},
+        ConnectInfo,
+        WebSocketUpgrade,
+    },
+    futures::{
+        future::{ready, Either},
+        stream::once,
+        lock::BiLock,
+        Stream,
+        StreamExt,
+        Sink
+    },
+    tracing::{error, info},
+    std::{
+        net::SocketAddr,
+    }
+};
+use crate::{Handler, Rpc};
 use axum::body::Bytes;
-use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Request, WebSocketUpgrade};
+use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use bon::__::IsUnset;
+use axum::RequestExt;
 use bon::Builder;
-use futures::FutureExt;
+use bon::__::IsUnset;
 use futures::future::BoxFuture;
+use futures::{FutureExt};
 use std::convert::Infallible;
 use std::marker::PhantomData;
-use std::net::SocketAddr;
+use std::pin::pin;
 use std::task::{Context, Poll};
 use tower::Service;
-use tracing::{Instrument, debug, info, info_span};
-use crate::server::axum::axum_builder::{SetRpc, SetServer};
-use crate::server::IntoHandler;
+use tracing::{debug, warn, info_span, Instrument};
 
 /// A service which serves an RPC service in multiple formats as part of an axum server
 #[derive(Builder)]
@@ -29,10 +52,10 @@ where
     R: Rpc + 'static,
     Server: FromRequestParts<State> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
-    <Server as IntoHandler<R>>::Handler: Sync + 'static
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
 {
-    #[builder(field)]
-    methods: Vec<Method>,
     #[builder(field)]
     formats: Formats<R>,
     #[builder(setters(name = rpc_type, vis = "pub(crate)"))]
@@ -49,11 +72,12 @@ where
     R: Rpc + 'static,
     Server: FromRequestParts<State> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
-    <Server as IntoHandler<R>>::Handler: Sync + 'static
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
 {
     fn clone(&self) -> Self {
         Self {
-            methods: self.methods.clone(),
             formats: self.formats.clone(),
             rpc: PhantomData,
             server: PhantomData,
@@ -69,13 +93,16 @@ where
     R: Rpc + 'static,
     Server: FromRequestParts<State> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
-    <Server as IntoHandler<R>>::Handler: Sync + 'static
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
 {
     /// Define the Rpc type
     ///
     /// This method exits so that the generic arg can be defined without having to define the other args
     pub fn rpc(self, _: PhantomData<R>) -> AxumBuilder<R, Server, State, SetRpc<BuildState>>
-    where BuildState::Rpc: IsUnset
+    where
+        BuildState::Rpc: IsUnset,
     {
         self.rpc_type(PhantomData)
     }
@@ -83,8 +110,12 @@ where
     /// Define the Server type
     ///
     /// This method exits so that the generic arg can be defined without having to define the other args
-    pub fn server(self, _: PhantomData<Server>) -> AxumBuilder<R, Server, State, SetServer<BuildState>>
-    where BuildState::Server: IsUnset
+    pub fn server(
+        self,
+        _: PhantomData<Server>,
+    ) -> AxumBuilder<R, Server, State, SetServer<BuildState>>
+    where
+        BuildState::Server: IsUnset,
     {
         self.server_type(PhantomData)
     }
@@ -95,12 +126,6 @@ where
         format: &'static impl for<'a> Format<RpcRequest<R>, RpcResponse<R>>,
     ) -> Self {
         self.formats.push(format);
-        self
-    }
-
-    /// Add a method to allow, NOTE: method must allow a body in both request and response
-    pub fn method(mut self, method: Method) -> Self {
-        self.methods.push(method);
         self
     }
 
@@ -121,24 +146,10 @@ where
     {
         self.format(&format::cbor::Cbor)
     }
-
-    /// Allow POST requests
-    pub fn allow_post(self) -> Self {
-        self.method(Method::POST)
-    }
-
-    /// Allow PUT requests
-    pub fn allow_put(self) -> Self {
-        self.method(Method::PUT)
-    }
-
-    /// Allow PATCH requests
-    pub fn allow_patch(self) -> Self {
-        self.method(Method::PATCH)
-    }
 }
 
 type Formats<R> = Vec<&'static dyn Format<<R as Rpc>::Request, <R as Rpc>::Response>>;
+#[cfg(feature = "websocket-server")]
 type RpcFormat<H> = &'static dyn Format<RpcRequest<H>, RpcResponse<H>>;
 type RpcRequest<R> = <R as Rpc>::Request;
 type RpcResponse<R> = <R as Rpc>::Response;
@@ -148,7 +159,9 @@ where
     R: Rpc + 'static,
     Server: FromRequestParts<State> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
-    <Server as IntoHandler<R>>::Handler: Sync + 'static
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
 {
     type Response = Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>;
     type Error = Infallible;
@@ -159,7 +172,7 @@ where
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        Box::pin(self.call_internal(req).map(Ok))
+        Box::pin(self.call_internal(req).map(Ok).instrument(info_span!("server", service = R::service_name())))
     }
 }
 
@@ -168,22 +181,33 @@ where
     R: Rpc + 'static,
     Server: FromRequestParts<State> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
-    <Server as IntoHandler<R>>::Handler: Sync + 'static
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
 {
     fn call_internal(
         &self,
         mut req: Request,
-    ) -> impl Future<Output = Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>> + Send + 'static {
-        let methods = self.methods.clone();
+    ) -> impl Future<
+        Output=Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>,
+    > + Send
+    + 'static {
         let formats = self.formats.clone();
         let state = self.state.clone();
         async move {
-            let server: Server = req.extract_parts_with_state(&state).await.map_err(Error::LoadServer)?;
+            let server: Server = req
+                .extract_parts_with_state(&state)
+                .await
+                .map_err(Error::LoadServer)?;
             let handler = server.into_handler();
-            if let Ok(mut ws) = req.extract_parts::<WebSocketUpgrade>().await
-                && let Ok(ConnectInfo(addr)) = req.extract_parts::<ConnectInfo<SocketAddr>>().await
-            {
-                println!("Upgrading to websocket at {addr}");
+            #[cfg(feature = "websocket-server")]
+            if let Ok(mut ws) = req.extract_parts::<WebSocketUpgrade>().await {
+                let addr = req.extract_parts::<ConnectInfo<SocketAddr>>().await.ok();
+                let addr = addr.map_or_else(
+                    || "<address not loaded>".to_string(),
+                    |addr| addr.to_string(),
+                );
+                info!("Upgrading to websocket at {addr}");
                 let protocols: Vec<_> = formats
                     .iter()
                     .copied()
@@ -200,11 +224,11 @@ where
                 let format: RpcFormat<R> = *format;
                 return Ok(ws.on_upgrade(move |socket|
                     Self::handle_websocket(socket, format, handler).instrument(
-                        info_span!(target: "websocket", "Websocket connection", address = addr.to_string())
+                        info_span!(target: "websocket", "Websocket connection", address = addr.clone())
                     )
                 ));
             }
-            if !methods.contains(req.method()) {
+            if req.method() != Method::POST {
                 return Err(Error::WrongMethod);
             }
             let content_type = req
@@ -237,45 +261,61 @@ where
                 .into_response())
         }
     }
+}
 
+#[cfg(feature = "websocket-server")]
+impl<R, Server, State> Axum<R, Server, State>
+where
+    R: Rpc + 'static,
+    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    State: Clone + Send + Sync + 'static,
+    <Server as IntoHandler<R>>::Handler: Sync + 'static,
+    <R as Rpc>::Response: Send + Sync,
+    <R as Rpc>::Request: Send,
+{
     async fn handle_websocket(
-        mut socket: WebSocket,
+        websocket: WebSocket,
         format: &'static dyn Format<RpcRequest<R>, RpcResponse<R>>,
         handler: <Server as IntoHandler<R>>::Handler,
     ) {
-        info!("Started websocket connection");
-        if socket
-            .send(Message::Ping(Bytes::from_static(&[1, 2, 3])))
-            .await
-            .is_err()
-        {
-            debug!("Failed to send ping message");
-            return;
+        let (sink_lock, stream_lock) = BiLock::new(websocket);
+        let stream = Self::websocket_stream(stream_lock);
+        let sink = Self::websocket_sink(sink_lock);
+        if let Err(error) = serve_request_stream(stream, sink, handler, format).await {
+            error!("Error occurred on websocket connection: {error}");
         }
-        debug!("Sent ping message");
+    }
 
-        loop {
-            let Some(msg) = socket.recv().await else {
-                info!("Websocket disconnected abruptly");
-                return;
-            };
-            let msg = match msg {
-                Ok(msg) => msg,
+    fn websocket_stream(websocket: BiLock<WebSocket>) -> impl Stream<Item=Vec<u8>> {
+        futures::stream::unfold(websocket, |websocket| async {
+            // in order to prevent lcok contention, the future should grab the lock opn each poll,
+            // but not hold it between polls, giving ample opportunity for the sender to grab the lock
+            let next = futures::future::poll_fn({
+                |cx| {
+                    let Poll::Ready(mut lock) = pin!(websocket.lock()).as_mut().poll(cx) else {
+                        return Poll::Pending;
+                    };
+                    pin!(lock.next()).poll(cx)
+                }
+            });
+            let next = next.await?;
+            let message = match next {
+                Ok(message) => message,
                 Err(error) => {
                     info!("Websocket disconnected with error: {error}");
-                    return;
+                    return None;
                 }
             };
-            let response = match msg {
-                Message::Text(_) => Some(Message::Text("text frames not supported".into())),
+            let mut should_close = false;
+            let result = match message {
+                Message::Text(_) => {
+                    websocket.lock().await.send(Message::Text("text frames not supported".into())).await
+                },
                 Message::Binary(bytes) => {
-                    Some(match Self::handle_request(format, &bytes, &handler).await {
-                        Ok(msg) => Message::Binary(msg.into()),
-                        Err(error) => Message::Text(error.into()),
-                    })
-                }
-                Message::Ping(bytes) => Some(Message::Pong(bytes)),
-                Message::Pong(_) => None,
+                    return Some((Some(bytes.to_vec()), websocket));
+                },
+                Message::Ping(bytes) => { websocket.lock().await.send(Message::Pong(bytes)).await },
+                Message::Pong(_) => Ok(()),
                 Message::Close(frame) => {
                     if let Some(frame) = frame {
                         info!(
@@ -285,33 +325,46 @@ where
                     } else {
                         info!("Websocket connection closed without frame");
                     }
-                    Some(Message::Close(None))
+                    should_close = true;
+                    websocket.lock().await.send(Message::Close(None)).await
                 }
             };
-            if let Some(response) = response
-                && socket.send(response).await.is_err()
-            {
-                debug!("Failed to send response message");
-                return;
+            if let Err(error) = result {
+                error!("Websocket connection error: {error}");
+                return None;
             }
-        }
+            if should_close {
+                None
+            } else {
+                Some((None, websocket))
+            }
+        }).flat_map(|option| {
+            option.map_or_else(|| Either::Right(futures::stream::empty()), |value| Either::Left(once(ready(value))))
+        })
     }
 
-    async fn handle_request(
-        format: RpcFormat<R>,
-        request: &[u8],
-        handler: &<Server as IntoHandler<R>>::Handler,
-    ) -> Result<Vec<u8>, String> {
-        let (request_id, request) = get_request_id(request);
-        let request: RpcRequest<R> = format
-            .read(request)
-            .map_err(|error| format!("Failed to parse request: {error}"))?;
-        let response = handler.handle(request).await;
-        let response = format
-            .write(response)
-            .map_err(|error| format!("Failed to write response: {error}"))?;
-        let response = prepend_id(request_id, response);
-        Ok(response)
+    fn websocket_sink(websocket: BiLock<WebSocket>) -> impl Sink<Vec<u8>, Error = <WebSocket as Sink<Message>>::Error> {
+        futures::sink::unfold(websocket, |websocket, bytes| async {
+            let result = {
+                debug!("Acquiring lock for websocket sink");
+                let mut sink = websocket.lock().await; // FIXME: lock contention
+                debug!("Sending response: {bytes:?}");
+                sink.send(Message::binary(bytes)).await
+            };
+            if let Err(error) = result {
+                warn!("Failed to send response: {error}");
+                Err(error)
+            } else {
+                debug!("Websocket sent successfully");
+                Ok(websocket)
+            }
+        })
+    }
+}
+
+impl From<axum::Error> for StreamError {
+    fn from(error: axum::Error) -> Self {
+        Self::SendFailed(error.to_string())
     }
 }
 

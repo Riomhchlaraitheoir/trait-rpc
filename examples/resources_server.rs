@@ -12,6 +12,7 @@ use derive_more::{AsRef, Deref};
 use futures::{Sink, SinkExt};
 use tokio::sync::{broadcast, RwLock};
 use tokio::sync::broadcast::error::RecvError;
+use tracing::warn;
 use trait_rpc::server::axum::Axum;
 
 include!("traits/resources.rs");
@@ -27,7 +28,6 @@ async fn main() {
                    .server(PhantomData::<ResourceServer<Book>>)
                    .allow_json()
                    .allow_cbor()
-                   .allow_post()
                    .build()
         
         )
@@ -38,7 +38,6 @@ async fn main() {
                    .server(PhantomData::<ResourceServer<Author>>)
                    .allow_json()
                    .allow_cbor()
-                   .allow_post()
                    .build()
         
         );
@@ -113,7 +112,7 @@ impl Resource for Author {
 }
 
 impl<T: Resource> ResourcesServer<T> for ResourceServer<T> {
-    async fn subscribe(&self, sink: impl Sink<T, Error = Infallible> + Send + 'static) {
+    async fn subscribe<'a>(&'a self, sink: impl Sink<T, Error=trait_rpc::server::StreamError> + Send + 'a) {
         let mut sink = pin!(sink);
         let mut receiver = self.new.subscribe();
         loop {
@@ -121,7 +120,7 @@ impl<T: Resource> ResourcesServer<T> for ResourceServer<T> {
                 Ok(value) => match sink.send(value).await {
                     Ok(()) => {},
                     Err(err) => {
-                        match err {}
+                        warn!("Failed to send value: {err}");
                     }
                 },
                 Err(RecvError::Closed) => break,
