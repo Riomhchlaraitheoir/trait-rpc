@@ -1,18 +1,18 @@
 //! Helpers for dealing with stream connections on the client side
 
 use crate::AsyncTransport;
-use crate::client::{HandleError, StreamTransport};
+use crate::client::{HandleError, ResponseStream, StreamTransport};
 use crate::format::IsFormat;
 use crate::stream::{ConnectionError, ConnectionMessage, message_sink, message_stream};
 use futures::channel::{mpsc, oneshot};
+use futures::future::join_all;
 use futures::lock::Mutex;
-use futures::{Sink, SinkExt, Stream, StreamExt, FutureExt};
+use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 use std::collections::HashMap;
 use std::mem;
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use futures::future::join_all;
 use thiserror::Error;
 use tracing::{Instrument, debug, info_span, warn};
 
@@ -70,12 +70,20 @@ impl StreamClient {
         let sender: RequestSender = Arc::new(Mutex::new(sender));
         let senders: SenderMap = Arc::default();
         let stream_senders: StreamSenderMap = Arc::default();
-        let request_sender = Self::request_sender(request_receiver, request_sink).instrument(info_span!("client request handler"));
-        let response_handler = Self::response_handler::<Out::Error>(response_stream, stream_senders.clone(), senders.clone()).instrument(info_span!("client response handler"));
+        let request_sender = Self::request_sender(request_receiver, request_sink)
+            .instrument(info_span!("client request handler"));
+        let response_handler = Self::response_handler::<Out::Error>(
+            response_stream,
+            stream_senders.clone(),
+            senders.clone(),
+        )
+        .instrument(info_span!("client response handler"));
         let job = join_all([
-            Box::pin(request_sender) as Pin<Box<dyn Future<Output = Result<(), ClientError<Out::Error>>> + Send>>,
+            Box::pin(request_sender)
+                as Pin<Box<dyn Future<Output = Result<(), ClientError<Out::Error>>> + Send>>,
             Box::pin(response_handler),
-        ]).map(|results| results.into_iter().collect());
+        ])
+        .map(|results| results.into_iter().collect());
         let client = Self {
             sender,
             senders,
@@ -89,7 +97,8 @@ impl StreamClient {
     async fn request_sender<Out>(
         mut request_receiver: mpsc::Receiver<ConnectionMessage<Vec<u8>>>,
         request_sink: Out,
-    ) -> Result<(), ClientError<Out::Error>> where
+    ) -> Result<(), ClientError<Out::Error>>
+    where
         Out: Sink<Vec<u8>>,
     {
         let mut request_sink = pin!(message_sink(request_sink, "client"));
@@ -99,7 +108,11 @@ impl StreamClient {
         Ok(())
     }
 
-    async fn response_handler<E>(response_stream: impl Stream<Item = Vec<u8>>, stream_senders: StreamSenderMap, response_senders: SenderMap) -> Result<(), ClientError<E>> {
+    async fn response_handler<E>(
+        response_stream: impl Stream<Item = Vec<u8>>,
+        stream_senders: StreamSenderMap,
+        response_senders: SenderMap,
+    ) -> Result<(), ClientError<E>> {
         let mut response_stream = pin!(message_stream(response_stream, "client").fuse());
         loop {
             let response = response_stream.next().await;
@@ -116,13 +129,9 @@ impl StreamClient {
                 ConnectionMessage::ConnectionError(error) => {
                     return Err(ClientError::ConnectionError(error));
                 }
-                ConnectionMessage::HandleError { request_id, error } => {
-                    (request_id, Err(error))
-                }
+                ConnectionMessage::HandleError { request_id, error } => (request_id, Err(error)),
                 ConnectionMessage::StreamEnd { request_id } => {
-                    if let Some(mut sender) =
-                        stream_senders.lock().await.remove(&request_id)
-                    {
+                    if let Some(mut sender) = stream_senders.lock().await.remove(&request_id) {
                         sender.disconnect();
                     } else {
                         warn!("sender not found for request: {request_id}");
@@ -184,7 +193,7 @@ impl StreamTransport for StreamClient {
         &self,
         request: Vec<u8>,
         content_type: &str,
-    ) -> Result<impl Stream<Item = Result<Vec<u8>, Self::Error>>, StreamError> {
+    ) -> Result<ResponseStream<Vec<u8>, StreamError>, StreamError> {
         if self.content_type != content_type {
             return Err(StreamError::IncorrectContentType {
                 expected: self.content_type,
@@ -203,7 +212,7 @@ impl StreamTransport for StreamClient {
             })
             .await
             .map_err(|_| StreamError::RequestChannelClosed)?;
-        Ok(receiver)
+        Ok(Box::new(receiver))
     }
 }
 
@@ -232,4 +241,17 @@ pub enum StreamError {
     /// An error was received from the server
     #[error("Error from server: {0}")]
     ServerError(#[from] HandleError),
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::Stream;
+    use crate::client::StreamTransport;
+    use super::{StreamClient, StreamError};
+
+    #[allow(dead_code)]
+    /// Test to ensure that stream can outlive transport, only needs to compile, no need to run
+    async fn test_stream_lifetime(transport: StreamClient) -> Box<dyn Stream<Item = Result<Vec<u8>, StreamError>> + 'static> {
+        transport.stream_resp(vec![], "").await.unwrap()
+    }
 }

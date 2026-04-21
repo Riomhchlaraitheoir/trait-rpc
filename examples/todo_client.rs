@@ -16,7 +16,7 @@ async fn main() {
                     .url("http://localhost:8080/api/todo")
                     .build()
             )
-            .format(Json)
+            .format(&Json)
             .build()
     );
     for todo in client.get_todos().await.expect("get_todos failed") {

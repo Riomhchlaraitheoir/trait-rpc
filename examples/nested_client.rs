@@ -16,7 +16,7 @@ async fn main() {
                     .url("http://localhost:8080/api")
                     .build()
             )
-            .format(Json)
+            .format(&Json)
             .build()
     );
     let dylan = client

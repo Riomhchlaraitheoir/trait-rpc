@@ -7,17 +7,17 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
-use tokio::sync::{oneshot, RwLock};
+use tokio::sync::{RwLock, oneshot};
 use tokio::time::{sleep, timeout};
 use tracing::log::Level;
-use tracing::{debug, info, info_span, Instrument};
-use trait_rpc::client::websocket::new_websocket_transport;
+use tracing::{Instrument, debug, info, info_span};
 use trait_rpc::client::SimpleClient;
+use trait_rpc::client::websocket::new_websocket_transport;
 use trait_rpc::format::json::Json;
-use trait_rpc::server::axum::Axum;
 use trait_rpc::server::StreamError;
+use trait_rpc::server::axum::Axum;
 use trait_rpc::stream::client::StreamClient;
-use trait_rpc::{client, Rpc};
+use trait_rpc::{Rpc, client};
 
 #[rpc]
 trait Service {
@@ -54,7 +54,10 @@ impl ServiceServer for ServiceImpl {
     }
 }
 
-async fn run_server(state: Arc<RwLock<ServerState>>, shutdown_signal: impl Future<Output = ()> + Send + 'static) {
+async fn run_server(
+    state: Arc<RwLock<ServerState>>,
+    shutdown_signal: impl Future<Output = ()> + Send + 'static,
+) {
     let server = axum::Router::new().route_service(
         "/",
         Axum::builder()
@@ -70,7 +73,10 @@ async fn run_server(state: Arc<RwLock<ServerState>>, shutdown_signal: impl Futur
         .await
         .unwrap();
     info!("Starting server");
-    axum::serve::serve(listener, server).with_graceful_shutdown(shutdown_signal).await.unwrap();
+    axum::serve::serve(listener, server)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+        .unwrap();
 }
 
 type Client = <Service as Rpc>::AsyncClient<SimpleClient<Json, StreamClient>>;
@@ -83,7 +89,10 @@ async fn websocket_test() {
 
     let (stop_server, shutdown_signal) = oneshot::channel::<()>();
     let state = Arc::<RwLock<ServerState>>::default();
-    let server = spawn(run_server(state.clone(), shutdown_signal.into_future().map(|_| ())).instrument(info_span!("server")));
+    let server = spawn(
+        run_server(state.clone(), shutdown_signal.into_future().map(|_| ()))
+            .instrument(info_span!("server")),
+    );
     info!("Server running");
     sleep(Duration::from_secs(1)).await;
     let client = client::builder()
@@ -93,7 +102,7 @@ async fn websocket_test() {
                 .await
                 .expect("Failed to create transport"),
         )
-        .format(Json)
+        .format(&Json)
         .build();
     let client = Service::async_client(client);
 

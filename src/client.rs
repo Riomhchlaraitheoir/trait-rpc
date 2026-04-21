@@ -1,5 +1,8 @@
 //! Contains modules for individual client implementations
-#![allow(clippy::future_not_send, reason = "Cannot explicitly make futures `Send` while supporting WASM")]
+#![allow(
+    clippy::future_not_send,
+    reason = "Cannot explicitly make futures `Send` while supporting WASM"
+)]
 
 use crate::format::Format;
 use bon::bon;
@@ -26,8 +29,6 @@ pub mod tokio_websocket;
 pub use tokio_websocket as websocket;
 
 #[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
-pub mod wasm_websocket;
-#[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
 pub use wasm_websocket as websocket;
 
 #[cfg(all(feature = "reqwest-blocking", target_arch = "wasm32"))]
@@ -47,40 +48,42 @@ pub struct Builder;
 impl Builder {
     /// Build an asynchronous client
     #[builder(finish_fn = build)]
-    pub const fn non_blocking<F, T>(
+    pub const fn non_blocking<F: 'static, T>(
         self,
         /// The format to be used for serialisation and deserialisation
         ///
         /// IMPORTANT, the format must be supported by the server
-        format: F,
+        format: &'static F,
         /// The transport mechanism to use
         ///
         /// Available options are:
         ///  * [request](reqwest::Reqwest)
         ///  * [browser](browser::Browser) (WASM-only)
-        transport: T
+        transport: T,
     ) -> SimpleClient<F, T>
-    where T: AsyncTransport
+    where
+        T: AsyncTransport,
     {
         SimpleClient { format, transport }
     }
 
     /// Build a blocking client
     #[builder(finish_fn = build)]
-    pub const fn blocking<F, T>(
+    pub const fn blocking<F: 'static, T>(
         self,
         /// The format to be used for serialisation and deserialisation
         ///
         /// IMPORTANT, the format must be supported by the server
-        format: F,
+        format: &'static F,
         /// The transport mechanism to use
         ///
         /// Available options are:
         ///  * [request](reqwest::Reqwest)
         ///  * [browser](browser::Browser) (WASM-only)
-        transport: T
+        transport: T,
     ) -> SimpleClient<F, T>
-    where T: BlockingTransport
+    where
+        T: BlockingTransport,
     {
         SimpleClient { format, transport }
     }
@@ -97,7 +100,10 @@ pub trait AsyncClient<Req, Resp>: Clone {
 /// A client implementation for sending requests asynchronously
 pub trait StreamClient<Req, Resp>: AsyncClient<Req, Resp> {
     /// Send a request and receive a response
-    fn send_streaming_response(&self, request: Req) -> impl Future<Output = Result<impl Stream<Item = Result<Resp, Self::Error>>, Self::Error>>;
+    fn send_streaming_response(
+        &self,
+        request: Req,
+    ) -> impl Future<Output = Result<impl Stream<Item = Result<Resp, Self::Error>> + Send + Unpin + 'static, Self::Error>>;
 }
 
 /// A client implementation for sending requests in a blocking manner
@@ -116,8 +122,8 @@ pub trait BlockingClient<Req, Resp>: Clone {
 
 /// A simple client which has a transport and format specified
 #[derive(Debug, Copy, Clone)]
-pub struct SimpleClient<F, T> {
-    format: F,
+pub struct SimpleClient<F: 'static, T> {
+    format: &'static F,
     transport: T,
 }
 
@@ -125,7 +131,7 @@ impl<F, T, Req, Resp> AsyncClient<Req, Resp> for SimpleClient<F, T>
 where
     F: Format<Resp, Req>,
     T: AsyncTransport,
-    Self: Clone
+    Self: Clone,
 {
     type Error = RpcError<T::Error>;
     /// Send a request and receive a response
@@ -137,24 +143,41 @@ where
     /// * Received the wrong type of response
     async fn send(&self, request: Req) -> Result<Resp, Self::Error> {
         let request = self.format.write(request).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(request, self.format.content_type()).await.map_err(RpcError::Transport)??;
-        let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
+        let response = self
+            .transport
+            .send(request, self.format.content_type())
+            .await
+            .map_err(RpcError::Transport)??;
+        let response = self
+            .format
+            .read(response.as_slice())
+            .map_err(RpcError::Deserialize)?;
         Ok(response)
     }
 }
 
 impl<F, T, Req, Resp> StreamClient<Req, Resp> for SimpleClient<F, T>
 where
-    F: Format<Resp, Req>,
+    F: Format<Resp, Req> + 'static,
     T: StreamTransport,
-    Self: Clone
+    Self: Clone,
 {
-    async fn send_streaming_response(&self, request: Req) -> Result<impl Stream<Item=Result<Resp, Self::Error>>, Self::Error> {
+    async fn send_streaming_response(
+        &self,
+        request: Req,
+    ) -> Result<impl Stream<Item = Result<Resp, Self::Error>> + 'static, Self::Error> {
         let request = self.format.write(request).map_err(RpcError::Serialize)?;
-        let stream = self.transport.stream_resp(request, self.format.content_type()).await.map_err(RpcError::Transport)?;
-        let stream = stream.map(|response| -> Result<Resp, Self::Error> {
+        let stream = self
+            .transport
+            .stream_resp(request, self.format.content_type())
+            .await
+            .map_err(RpcError::Transport)?;
+        let format = self.format;
+        let stream = stream.map(move |response| -> Result<Resp, Self::Error> {
             let response = response.map_err(RpcError::Transport)?;
-            let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
+            let response = format
+                .read(response.as_slice())
+                .map_err(RpcError::Deserialize)?;
             Ok(response)
         });
         Ok(stream)
@@ -165,13 +188,19 @@ impl<F, T, Req, Resp> BlockingClient<Req, Resp> for SimpleClient<F, T>
 where
     F: Format<Resp, Req>,
     T: BlockingTransport,
-    Self: Clone
+    Self: Clone,
 {
     type Error = RpcError<T::Error>;
     fn send(&self, request: Req) -> Result<Resp, Self::Error> {
         let request = self.format.write(request).map_err(RpcError::Serialize)?;
-        let response = self.transport.send(request, self.format.content_type()).map_err(RpcError::Transport)??;
-        let response = self.format.read(response.as_slice()).map_err(RpcError::Deserialize)?;
+        let response = self
+            .transport
+            .send(request, self.format.content_type())
+            .map_err(RpcError::Transport)??;
+        let response = self
+            .format
+            .read(response.as_slice())
+            .map_err(RpcError::Deserialize)?;
         Ok(response)
     }
 }
@@ -189,7 +218,11 @@ pub trait AsyncTransport: Clone {
     /// This is the error type which is returned in the case that some part of the transport failed
     type Error: Error + 'static;
     /// Sends the request and returns the response
-    fn send(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output=Result<Result<Vec<u8>, HandleError>, Self::Error>>;
+    fn send(
+        &self,
+        request: Vec<u8>,
+        content_type: &str,
+    ) -> impl Future<Output = Result<Result<Vec<u8>, HandleError>, Self::Error>>;
 }
 
 /// This trait describes the transport layer of a client,
@@ -212,8 +245,15 @@ pub trait BlockingTransport: Clone {
     ///
     /// # Errors
     /// Returns an error in the case that the communication failed for any reason
-    fn send(&self, request: Vec<u8>, content_type: &str) -> Result<Result<Vec<u8>, HandleError>, Self::Error>;
+    fn send(
+        &self,
+        request: Vec<u8>,
+        content_type: &str,
+    ) -> Result<Result<Vec<u8>, HandleError>, Self::Error>;
 }
+
+/// A boxed stream of responses as bytes
+pub type ResponseStream<T, Err> = Box<dyn Stream<Item = Result<T, Err>> + Unpin + Send + 'static>;
 
 /// This trait describes the transport layer of a client,
 ///
@@ -226,7 +266,13 @@ pub trait BlockingTransport: Clone {
 /// Naturally a format and protocol the is supported by the server should be chosen
 pub trait StreamTransport: AsyncTransport {
     /// Sends the request and returns the response
-    fn stream_resp(&self, request: Vec<u8>, content_type: &str) -> impl Future<Output = Result<impl Stream<Item=Result<Vec<u8>, Self::Error>>, Self::Error>> + Send;
+    fn stream_resp(
+        &self,
+        request: Vec<u8>,
+        content_type: &str,
+    ) -> impl Future<
+        Output = Result<ResponseStream<Vec<u8>, Self::Error>, Self::Error>,
+    > + Send;
 }
 
 /// This is a transport layer used for nesting services
@@ -239,11 +285,12 @@ pub struct MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> {
 }
 
 impl<T: Copy, InnerReq, OuterReq, InnerResp, OuterResp, Args: Copy> Copy
-for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-{}
+    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+{
+}
 
 impl<T: Clone, InnerReq, OuterReq, InnerResp, OuterResp, Args: Clone> Clone
-for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 {
     fn clone(&self) -> Self {
         Self {
@@ -256,7 +303,7 @@ for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 }
 
 impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+    MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 {
     #[doc(hidden)]
     #[must_use]
@@ -275,7 +322,7 @@ MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
     }
 }
 impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> AsyncClient<InnerReq, InnerResp>
-for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 where
     Args: Clone,
     T: AsyncClient<OuterReq, OuterResp>,
@@ -291,27 +338,34 @@ where
     }
 }
 
-impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> StreamClient<InnerReq, InnerResp>
-for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+impl<T, InnerReq, OuterReq, InnerResp: 'static, OuterResp: 'static, Args>
+    StreamClient<InnerReq, InnerResp>
+    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 where
     Args: Clone,
     T: StreamClient<OuterReq, OuterResp>,
 {
-    async fn send_streaming_response(&self, request: InnerReq) -> Result<impl Stream<Item=Result<InnerResp, Self::Error>>, Self::Error> {
+    async fn send_streaming_response(
+        &self,
+        request: InnerReq,
+    ) -> Result<impl Stream<Item = Result<InnerResp, Self::Error>> + 'static, Self::Error> {
         let request = (self.to_outer)(self.args.clone(), request);
         let stream = self.outer.send_streaming_response(request).await?;
-        Ok(stream.map(|response| -> Result<InnerResp, Self::Error> {
-            let response = match response {
-                Ok(response) => Ok(response),
-                Err(err) => Err(err.into_wrong_response()?),
-            };
-            Ok((self.to_inner)(response)?)
-        }))
+        let to_inner = self.to_inner;
+        Ok(
+            stream.map(move |response| -> Result<InnerResp, Self::Error> {
+                let response = match response {
+                    Ok(response) => Ok(response),
+                    Err(err) => Err(err.into_wrong_response()?),
+                };
+                Ok((to_inner)(response)?)
+            }),
+        )
     }
 }
 
 impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> BlockingClient<InnerReq, InnerResp>
-for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
+    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
 where
     Args: Clone,
     T: BlockingClient<OuterReq, OuterResp>,
@@ -370,7 +424,9 @@ pub enum HandleError {
 /// This is not an expected case and is simply included to avoid panicking in this case
 /// This error either means the server side is misbehaving quite badly, or the transport is not configured to the correct endpoint
 #[derive(Debug, Error, Clone)]
-#[error("Response was for the wrong method, sent a request for {expected}, but received the response for {actual}")]
+#[error(
+    "Response was for the wrong method, sent a request for {expected}, but received the response for {actual}"
+)]
 pub struct WrongResponseType {
     /// The expected method
     pub expected: String,
@@ -414,5 +470,11 @@ impl<T: Error> MaybeWrongResponse for RpcError<T> {
         } else {
             Err(self)
         }
+    }
+}
+
+impl MaybeWrongResponse for WrongResponseType {
+    fn into_wrong_response(self) -> Result<WrongResponseType, Self> {
+        Ok(self)
     }
 }

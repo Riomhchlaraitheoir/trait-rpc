@@ -3,10 +3,10 @@
 
 use std::error::Error;
 
-#[cfg(feature = "json")]
-pub mod json;
 #[cfg(all(feature = "browser-json", target_arch = "wasm32"))]
 pub mod browser_json;
+#[cfg(feature = "json")]
+pub mod json;
 #[cfg(all(feature = "browser-json", not(target_arch = "wasm32")))]
 compile_error!("browser-json is only available on wasm32 arch");
 #[cfg(feature = "cbor")]

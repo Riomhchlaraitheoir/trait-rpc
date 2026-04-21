@@ -1,17 +1,17 @@
-use std::marker::PhantomData;
-use std::sync::{Arc};
-use std::time::Duration;
 use async_executor::Executor;
 use axum::extract::{FromRequestParts, State};
+use macros::rpc;
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use macros::rpc;
-use trait_rpc::{client, Rpc};
-use trait_rpc::client::reqwest::Reqwest;
 use trait_rpc::client::SimpleClient;
+use trait_rpc::client::reqwest::Reqwest;
 use trait_rpc::format::json::Json;
 use trait_rpc::server::axum::Axum;
+use trait_rpc::{Rpc, client};
 
 #[rpc]
 trait Service {
@@ -21,7 +21,7 @@ trait Service {
 
 #[derive(Default)]
 struct ServerState {
-    set_value: u64
+    set_value: u64,
 }
 
 #[derive(FromRequestParts)]
@@ -40,18 +40,20 @@ impl ServiceServer for ServiceImpl {
 }
 
 async fn run_server(state: Arc<RwLock<ServerState>>) {
-    let server = axum::Router::new()
-        .route_service("/",
-                       Axum::builder()
-                           .rpc(PhantomData::<Service>)
-                           .server(PhantomData::<ServiceImpl>)
-                           .state(state)
-                           .allow_json()
-                           .allow_cbor()
-                           .build()
-        );
+    let server = axum::Router::new().route_service(
+        "/",
+        Axum::builder()
+            .rpc(PhantomData::<Service>)
+            .server(PhantomData::<ServiceImpl>)
+            .state(state)
+            .allow_json()
+            .allow_cbor()
+            .build(),
+    );
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:7456").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:7456")
+        .await
+        .unwrap();
     axum::serve::serve(listener, server).await.unwrap();
 }
 
@@ -64,12 +66,8 @@ async fn main() {
     sleep(Duration::from_secs(1)).await;
     let client = client::builder()
         .non_blocking()
-        .transport(
-            Reqwest::builder()
-                .url("http://localhost:7456")
-                .build()
-        )
-        .format(Json)
+        .transport(Reqwest::builder().url("http://localhost:7456").build())
+        .format(&Json)
         .build();
     let client = Arc::new(Service::async_client(client));
 

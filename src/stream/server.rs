@@ -3,18 +3,18 @@
 use crate::client::HandleError;
 use crate::format::Format;
 use crate::server::StreamError;
-use crate::stream::{message_sink, message_stream, ConnectionError, ConnectionMessage};
+use crate::stream::{ConnectionError, ConnectionMessage, message_sink, message_stream};
 use crate::{Handler, Request, Rpc};
 use async_executor::Executor;
 use futures::channel::mpsc;
-use futures::channel::mpsc::{unbounded, SendError};
-use futures::future::{select, Either};
+use futures::channel::mpsc::{SendError, unbounded};
+use futures::future::{Either, select};
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use std::fmt::Debug;
 use std::future::ready;
-use std::pin::{pin, Pin};
+use std::pin::{Pin, pin};
 use thiserror::Error;
-use tracing::{debug, error, info_span, warn, Instrument};
+use tracing::{Instrument, debug, error, info_span, warn};
 
 /// Handle incoming requests, responding appropriately
 ///
@@ -68,17 +68,22 @@ where
     let receiver = pin!(receiver);
     let sink = pin!(sink);
     let executor = Executor::new();
-    executor.run(async {
-        let request_handler = request_handler(stream, &handler, sender, &executor).instrument(info_span!("request_handler"));
-        let request_handler = pin!(request_handler);
-        let response_handler = response_handler(receiver, sink).instrument(info_span!("response_handler"));
-        let response_handler = pin!(response_handler);
+    executor
+        .run(async {
+            let request_handler = request_handler(stream, &handler, sender, &executor)
+                .instrument(info_span!("request_handler"));
+            let request_handler = pin!(request_handler);
+            let response_handler =
+                response_handler(receiver, sink).instrument(info_span!("response_handler"));
+            let response_handler = pin!(response_handler);
 
-        match select(request_handler, response_handler).await {
-            Either::Left(((), _)) => Ok(()),
-            Either::Right((result, _)) => result
-        }
-    }).instrument(info_span!("server executor")).await
+            match select(request_handler, response_handler).await {
+                Either::Left(((), _)) => Ok(()),
+                Either::Right((result, _)) => result,
+            }
+        })
+        .instrument(info_span!("server executor"))
+        .await
 }
 
 async fn response_handler<Response: Debug, Out>(
@@ -129,8 +134,9 @@ async fn request_handler<'a, H, In>(
         };
 
         debug!("Handling request {request_id:?}: {request:?}");
-        let handler_span = info_span!("handler", request_id, method = request.name().as_ref());
-        if request.is_streaming_response() {
+        let streaming = request.is_streaming_response();
+        let handler_span = info_span!("handler", request_id, method = request.name().as_ref(), streaming = streaming);
+        if streaming {
             let sink = sender.clone();
             let sink = sink.with(move |response| {
                 debug!("Sending stream response for request {request_id:?}: {response:?}");
@@ -149,22 +155,35 @@ async fn request_handler<'a, H, In>(
                 }
             });
             let mut sender = sender.clone();
-            executor.spawn(async move {
-                handler.handle_stream_response(request, sink).await;
-                sender.send(ConnectionMessage::StreamEnd { request_id }).await
-            }.instrument(handler_span)).detach();
+            executor
+                .spawn(
+                    async move {
+                        handler.handle_stream_response(request, sink).await;
+                        sender
+                            .send(ConnectionMessage::StreamEnd { request_id })
+                            .await
+                    }
+                    .instrument(handler_span),
+                )
+                .detach();
         } else {
+            debug!("Is not streaming response");
             let mut sender = sender.clone();
-            executor.spawn(async move {
-                let response = handler.handle(request).await;
-                sender
-                    .send(ConnectionMessage::Payload {
-                        request_id,
-                        payload: response,
-                    })
-                    .await
-                    .expect("response channel closed");
-            }.instrument(handler_span)).detach();
+            executor
+                .spawn(
+                    async move {
+                        let response = handler.handle(request).await;
+                        sender
+                            .send(ConnectionMessage::Payload {
+                                request_id,
+                                payload: response,
+                            })
+                            .await
+                            .expect("response channel closed");
+                    }
+                    .instrument(handler_span),
+                )
+                .detach();
         }
     }
 }
@@ -203,20 +222,20 @@ fn formatted_sink<Read, Write, S: Sink<ConnectionMessage<Vec<u8>>>>(
 
 #[cfg(test)]
 mod test {
-    use crate::server::StreamError;
-    use crate::stream::server::handle_formatted_requests;
-    use crate::stream::ConnectionMessage;
     use crate::RpcWithServer;
-    use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+    use crate::server::StreamError;
+    use crate::stream::ConnectionMessage;
+    use crate::stream::server::handle_formatted_requests;
+    use crate::stream::server::test::test_rpc::{Request, Response};
+    use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
     use futures::{Sink, SinkExt, Stream, StreamExt};
     use macros::rpc;
-    use std::pin::{pin, Pin};
+    use pin_project::pin_project;
+    use std::pin::{Pin, pin};
     use std::task::{Context, Poll};
     use std::time::Duration;
-    use pin_project::pin_project;
     use tokio::time::sleep;
     use tracing::{debug, info};
-    use crate::stream::server::test::test_rpc::{Request, Response};
 
     const FIBONACCI_LIMIT: u32 = 1000;
 
@@ -266,7 +285,7 @@ mod test {
         #[pin]
         sink: UnboundedSender<ConnectionMessage<Response>>,
         #[pin]
-        stream: UnboundedReceiver<ConnectionMessage<Request>>
+        stream: UnboundedReceiver<ConnectionMessage<Request>>,
     }
 
     impl Stream for SinkAndStream {
@@ -282,13 +301,18 @@ mod test {
     }
 
     impl Sink<ConnectionMessage<Response>> for SinkAndStream {
-        type Error = <UnboundedSender<ConnectionMessage<Response>> as Sink<ConnectionMessage<Response>>>::Error;
+        type Error = <UnboundedSender<ConnectionMessage<Response>> as Sink<
+            ConnectionMessage<Response>,
+        >>::Error;
 
         fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             self.project().sink.poll_ready(cx)
         }
 
-        fn start_send(self: Pin<&mut Self>, item: ConnectionMessage<Response>) -> Result<(), Self::Error> {
+        fn start_send(
+            self: Pin<&mut Self>,
+            item: ConnectionMessage<Response>,
+        ) -> Result<(), Self::Error> {
             self.project().sink.start_send(item)
         }
 
@@ -308,13 +332,9 @@ mod test {
         tokio::spawn(async {
             println!("Starting test server");
             let handler = TestRpc::handler(TestImpl);
-            handle_formatted_requests(
-                request_receiver,
-                response_sender,
-                handler,
-            )
-            .await
-            .expect("server error");
+            handle_formatted_requests(request_receiver, response_sender, handler)
+                .await
+                .expect("server error");
             println!("Finished test server");
         });
 
@@ -367,13 +387,9 @@ mod test {
         tokio::spawn(async {
             println!("Starting test server");
             let handler = TestRpc::handler(TestImpl);
-            handle_formatted_requests(
-                stream,
-                sink,
-                handler,
-            )
-            .await
-            .expect("server error");
+            handle_formatted_requests(stream, sink, handler)
+                .await
+                .expect("server error");
             println!("Finished test server");
         });
 
@@ -423,7 +439,10 @@ mod test {
             .await
             .expect("response channel closed");
 
-        assert!(matches!(message, ConnectionMessage::StreamEnd { request_id: 123 }), "unexpected message: {message:?}");
+        assert!(
+            matches!(message, ConnectionMessage::StreamEnd { request_id: 123 }),
+            "unexpected message: {message:?}"
+        );
         info!("test finished");
     }
 }

@@ -235,7 +235,7 @@ impl ToTokens for Rpc {
                 use std::convert::Infallible;
                 use std::marker::PhantomData;
                 use #trait_rpc::{
-                    client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+                    client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
                     futures::sink::{Sink, SinkExt},
                     futures::stream::{Stream, StreamExt},
                     serde::{Deserialize, Serialize},
@@ -442,10 +442,10 @@ impl Rpc {
                     if is_async {
                         quote! {
                             #docs
-                            pub async fn #name(&self #(, #params)*) -> Result<impl Stream<Item = Result<#ret, _Client::Error>>, _Client::Error> where _Client: StreamClient<Request #generics, Response #generics> {
+                            pub async fn #name(&self #(, #params)*) -> Result<ResponseStream<#ret, _Client::Error>, _Client::Error> where _Client: StreamClient<Request #generics, Response #generics> {
                                 let stream = self.0.send_streaming_response(Request::#variant(#(#args),*)).await?;
                                 Ok(
-                                     stream
+                                     Box::new(stream
                                          .map(|value| {
                                              match value {
                                                  Ok(Response::#variant(value)) => Ok(value),
@@ -454,7 +454,7 @@ impl Rpc {
                                                  }
                                                  Err(error) => Err(error.into()),
                                              }
-                                         }),
+                                         })),
 
                                 )
                             }

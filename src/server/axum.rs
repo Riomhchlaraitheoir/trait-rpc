@@ -1,49 +1,44 @@
 #[allow(unused_imports, reason = "only used if certain features are enabled")]
 use crate::format;
-use crate::format::{Format};
-use crate::server::axum::axum_builder::{SetRpc, SetServer};
+use crate::format::Format;
+use crate::server::axum::axum_builder::{SetEnableWebsockets, SetRpc, SetServer};
 use crate::server::{IntoHandler, StreamError};
-#[cfg(feature = "websocket-server")]
-use {
-    crate::{
-        stream::server::serve_request_stream,
-        format::IsFormat
-    },
-    axum::extract::{
-        ws::{Message, WebSocket},
-        ConnectInfo,
-        WebSocketUpgrade,
-    },
-    futures::{
-        future::{ready, Either},
-        stream::once,
-        lock::BiLock,
-        Stream,
-        StreamExt,
-        Sink
-    },
-    tracing::{error, info},
-    std::{
-        net::SocketAddr,
-    }
-};
 use crate::{Handler, Rpc};
+use axum::RequestExt;
 use axum::body::Bytes;
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::RequestExt;
-use bon::Builder;
 use bon::__::IsUnset;
+use bon::Builder;
+use futures::FutureExt;
 use futures::future::BoxFuture;
-use futures::{FutureExt};
 use std::convert::Infallible;
+use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::pin::pin;
 use std::task::{Context, Poll};
 use tower::Service;
-use tracing::{debug, warn, info_span, Instrument};
+#[allow(
+    unused_imports,
+    reason = "may be unused depending on features, not worth splitting behind toggles"
+)]
+use tracing::{Instrument, debug, error, info, info_span, warn};
+#[cfg(feature = "websocket-server")]
+use {
+    crate::{format::IsFormat, stream::server::serve_request_stream},
+    axum::extract::{
+        ConnectInfo, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    futures::{
+        Sink, Stream, StreamExt,
+        future::{Either, ready},
+        lock::BiLock,
+        stream::once,
+    },
+    std::{net::SocketAddr, pin::pin},
+};
 
 /// A service which serves an RPC service in multiple formats as part of an axum server
 #[derive(Builder)]
@@ -63,7 +58,7 @@ where
     #[builder(setters(name = server_type, vis = "pub(crate)"))]
     server: PhantomData<fn() -> Server>,
     state: State,
-    #[builder(default)]
+    #[builder(default, setters(vis = "", name = enable_ws))]
     enable_websockets: bool,
 }
 
@@ -91,7 +86,7 @@ impl<R, Server, State, BuildState> AxumBuilder<R, Server, State, BuildState>
 where
     BuildState: axum_builder::State,
     R: Rpc + 'static,
-    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    Server: FromRequestParts<State, Rejection: Debug> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
     <Server as IntoHandler<R>>::Handler: Sync + 'static,
     <R as Rpc>::Response: Send + Sync,
@@ -146,6 +141,20 @@ where
     {
         self.format(&format::cbor::Cbor)
     }
+
+    /// Enable Websocket support
+    pub fn enable_websockets(self) -> AxumBuilder<R, Server, State, SetEnableWebsockets<BuildState>>
+    where
+        BuildState::EnableWebsockets: IsUnset,
+    {
+        const {
+            assert!(
+                cfg!(feature = "websocket-server"),
+                "Websockets require feature `websocket-server`"
+            );
+        };
+        self.enable_ws(true)
+    }
 }
 
 type Formats<R> = Vec<&'static dyn Format<<R as Rpc>::Request, <R as Rpc>::Response>>;
@@ -157,7 +166,7 @@ type RpcResponse<R> = <R as Rpc>::Response;
 impl<R, Server, State> Service<Request> for Axum<R, Server, State>
 where
     R: Rpc + 'static,
-    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    Server: FromRequestParts<State, Rejection: Debug> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
     <Server as IntoHandler<R>>::Handler: Sync + 'static,
     <R as Rpc>::Response: Send + Sync,
@@ -172,14 +181,18 @@ where
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        Box::pin(self.call_internal(req).map(Ok).instrument(info_span!("server", service = R::service_name())))
+        Box::pin(
+            self.call_internal(req)
+                .map(Ok)
+                .instrument(info_span!("server", service = R::service_name())),
+        )
     }
 }
 
 impl<R, Server, State> Axum<R, Server, State>
 where
     R: Rpc + 'static,
-    Server: FromRequestParts<State> + IntoHandler<R> + 'static,
+    Server: FromRequestParts<State, Rejection: Debug> + IntoHandler<R> + 'static,
     State: Clone + Send + Sync + 'static,
     <Server as IntoHandler<R>>::Handler: Sync + 'static,
     <R as Rpc>::Response: Send + Sync,
@@ -189,19 +202,23 @@ where
         &self,
         mut req: Request,
     ) -> impl Future<
-        Output=Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>,
+        Output = Result<Response, Error<<Server as FromRequestParts<State>>::Rejection>>,
     > + Send
     + 'static {
         let formats = self.formats.clone();
         let state = self.state.clone();
+        #[cfg(feature = "websocket-server")]
+        let websockets_enabled = self.enable_websockets;
         async move {
-            let server: Server = req
-                .extract_parts_with_state(&state)
-                .await
-                .map_err(Error::LoadServer)?;
+            let server: Server = req.extract_parts_with_state(&state).await.map_err(|err| {
+                info!("Failed to load service for request: {:?}", err);
+                Error::LoadServer(err)
+            })?;
             let handler = server.into_handler();
             #[cfg(feature = "websocket-server")]
-            if let Ok(mut ws) = req.extract_parts::<WebSocketUpgrade>().await {
+            if websockets_enabled && let Ok(mut ws) = req.extract_parts::<WebSocketUpgrade>().await
+            {
+                debug!("received websocket upgrade request");
                 let addr = req.extract_parts::<ConnectInfo<SocketAddr>>().await.ok();
                 let addr = addr.map_or_else(
                     || "<address not loaded>".to_string(),
@@ -229,6 +246,7 @@ where
                 ));
             }
             if req.method() != Method::POST {
+                debug!("wrong method, expecting POST, but got {}", req.method());
                 return Err(Error::WrongMethod);
             }
             let content_type = req
@@ -286,7 +304,7 @@ where
         }
     }
 
-    fn websocket_stream(websocket: BiLock<WebSocket>) -> impl Stream<Item=Vec<u8>> {
+    fn websocket_stream(websocket: BiLock<WebSocket>) -> impl Stream<Item = Vec<u8>> {
         futures::stream::unfold(websocket, |websocket| async {
             // in order to prevent lcok contention, the future should grab the lock opn each poll,
             // but not hold it between polls, giving ample opportunity for the sender to grab the lock
@@ -309,12 +327,16 @@ where
             let mut should_close = false;
             let result = match message {
                 Message::Text(_) => {
-                    websocket.lock().await.send(Message::Text("text frames not supported".into())).await
-                },
+                    websocket
+                        .lock()
+                        .await
+                        .send(Message::Text("text frames not supported".into()))
+                        .await
+                }
                 Message::Binary(bytes) => {
                     return Some((Some(bytes.to_vec()), websocket));
-                },
-                Message::Ping(bytes) => { websocket.lock().await.send(Message::Pong(bytes)).await },
+                }
+                Message::Ping(bytes) => websocket.lock().await.send(Message::Pong(bytes)).await,
                 Message::Pong(_) => Ok(()),
                 Message::Close(frame) => {
                     if let Some(frame) = frame {
@@ -338,12 +360,18 @@ where
             } else {
                 Some((None, websocket))
             }
-        }).flat_map(|option| {
-            option.map_or_else(|| Either::Right(futures::stream::empty()), |value| Either::Left(once(ready(value))))
+        })
+        .flat_map(|option| {
+            option.map_or_else(
+                || Either::Right(futures::stream::empty()),
+                |value| Either::Left(once(ready(value))),
+            )
         })
     }
 
-    fn websocket_sink(websocket: BiLock<WebSocket>) -> impl Sink<Vec<u8>, Error = <WebSocket as Sink<Message>>::Error> {
+    fn websocket_sink(
+        websocket: BiLock<WebSocket>,
+    ) -> impl Sink<Vec<u8>, Error = <WebSocket as Sink<Message>>::Error> {
         futures::sink::unfold(websocket, |websocket, bytes| async {
             let result = {
                 debug!("Acquiring lock for websocket sink");

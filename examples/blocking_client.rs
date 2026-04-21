@@ -17,7 +17,7 @@ fn main() {
                     .method(Method::POST)
                     .build()
             )
-            .format(Json)
+            .format(&Json)
             .build()
     );
     for todo in client.get_todos().expect("get_todos failed") {
