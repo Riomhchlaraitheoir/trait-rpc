@@ -51,42 +51,14 @@ impl Parser {
             ));
         }
         let name = item.sig.ident.clone();
-        let mut args = Vec::with_capacity(item.sig.inputs.len() - 1);
-        let mut has_self = false;
+        let mut args = Vec::with_capacity(item.sig.inputs.len());
         for arg in &item.sig.inputs {
             match arg {
                 FnArg::Receiver(s) => {
-                    if has_self {
-                        return Err(syn::Error::new_spanned(s, "cannot have multiple receivers"));
-                    }
-                    if s.reference.is_none() {
-                        return Err(syn::Error::new_spanned(s, "cannot take owned self value"));
-                    }
-                    if s.mutability.is_some() {
-                        return Err(syn::Error::new_spanned(
-                            s,
-                            "cannot take a mutable self reference",
-                        ));
-                    }
-                    if let Type::Reference(ty) = &*s.ty
-                        && ty.mutability.is_none()
-                        && let Type::Path(ty) = &*ty.elem
-                        && ty.path.segments.len() == 1
-                        && ty.path.segments[0].ident == "Self"
-                    {
-                    } else {
-                        return Err(syn::Error::new_spanned(
-                            s,
-                            "cannot use a smart pointer for self type, must use &Self",
-                        ));
-                    }
-                    has_self = true;
+                    return Err(syn::Error::new_spanned(s, "self receiver is not supported"));
                 }
                 FnArg::Typed(arg) => args.push(arg.clone()),
             }
-        }
-        if !has_self {
-            return Err(syn::Error::new_spanned(item, "missing self"));
         }
         let ret = self.return_type(item.sig.output)?;
         let docs = item.attrs.iter().filter_map(docs).collect();

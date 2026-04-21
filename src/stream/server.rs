@@ -241,8 +241,8 @@ mod test {
 
     #[rpc(trait_rpc = crate)]
     trait TestRpc {
-        fn simple_call(&self, id: u32) -> String;
-        fn fibonacci(&self) -> Stream<u32>;
+        fn simple_call(id: u32) -> String;
+        fn fibonacci() -> Stream<u32>;
     }
 
     impl PartialEq for test_rpc::Response {

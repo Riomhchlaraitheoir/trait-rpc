@@ -15,8 +15,8 @@ use trait_rpc::{Rpc, client};
 
 #[rpc]
 trait Service {
-    fn simple_get(&self) -> String;
-    fn simple_set(&self, value: u64);
+    fn simple_get() -> String;
+    fn simple_set(value: u64);
 }
 
 #[derive(Default)]

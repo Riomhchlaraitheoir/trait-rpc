@@ -16,10 +16,10 @@ pub struct Author {
 
 #[macros::rpc]
 pub trait Resources<T> {
-    fn subscribe(&self) -> Stream<T>;
-    fn list(&self) -> Vec<T>;
-    fn get(&self, id: u64) -> Option<T>;
-    fn new(&self, value: T);
+    fn subscribe() -> Stream<T>;
+    fn list() -> Vec<T>;
+    fn get(id: u64) -> Option<T>;
+    fn new(value: T);
 }
 
 // include expanded form here for debugging:
