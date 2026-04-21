@@ -7,7 +7,7 @@ mod resources {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -125,7 +125,7 @@ mod resources {
                 Request::List() => Response::List(self.0.list().await),
                 Request::Get(id) => Response::Get(self.0.get(id).await),
                 Request::New(value) => Response::New(self.0.new(value).await),
-                _ => panic!("This is a streaming method, must call handle_streaming"),
+                _ => panic!("This is a streaming method, must call handle_stream_response"),
             }
         }
         async fn handle_stream_response<'a, S: Sink<Response<T>, Error = StreamError> + Send + 'a>(&'a self, request: Request<T>, sink: S) {
@@ -148,15 +148,15 @@ mod resources {
     pub struct ResourcesAsyncClient<_Client, T>(_Client, (PhantomData<fn() -> (T,)>));
     #[allow(clippy::future_not_send)]
          impl<_Client: AsyncClient<Request<T>, Response<T>>, T> ResourcesAsyncClient<_Client, T> {
-        pub async fn subscribe(&self) -> Result<impl Stream<Item = Result<T, _Client::Error>>, _Client::Error> where _Client: StreamClient<Request<T>, Response<T>> {
+        pub async fn subscribe(&self) -> Result<ResponseStream<T, _Client::Error>, _Client::Error> where _Client: StreamClient<Request<T>, Response<T>> {
             let stream = self.0.send_streaming_response(Request::Subscribe()).await?;
-            Ok(stream.map(|value| {
+            Ok(Box::new(stream.map(|value| {
                 match value {
                     Ok(Response::Subscribe(value)) => Ok(value),
                     Ok(other) => Err(WrongResponseType::new("subscribe", other.fn_name()).into()),
                     Err(error) => {Err(error.into())},
                 }
-            }))
+            })))
         }
         pub async fn list(&self) -> Result<Vec<T>, _Client::Error> {
             match self.0.send(Request::List()).await? {

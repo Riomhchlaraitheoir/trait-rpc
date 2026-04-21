@@ -82,20 +82,25 @@ impl ToTokens for Rpc {
                         ty: *pat.ty.clone(),
                     })
                     .collect();
-                if let ReturnType::Nested { service: ret } = &method.ret {
+                let streaming = matches!(method.ret, ReturnType::Streaming(_));
+                let is_streaming = if let ReturnType::Nested { service: ret } = &method.ret {
                     fields.push(parse_quote! {
                         <#ret as Rpc>::Request
                     });
-                }
-                let streaming = matches!(method.ret, ReturnType::Streaming(_));
+                    quote!(
+                        Self::#name(.., request) => request.is_streaming_response()
+                    )
+                } else {
+                    quote!(
+                        Self::#name(..) => #streaming
+                    )
+                };
                 (
                     quote!(
                         #[serde(rename = #snake_name)]
                         #name(#(#fields),*)
                     ),
-                    quote!(
-                        Self::#name(..) => #streaming
-                    ),
+                    is_streaming
                 )
             })
             .unzip();
@@ -188,7 +193,14 @@ impl ToTokens for Rpc {
                 }
             };
             let streaming_handle = match &method.ret {
-                ReturnType::Nested { .. } | ReturnType::Simple(..) => {
+                ReturnType::Nested { .. } => {
+                    quote! {
+                        Request::#variant(#(#params, )*request) => {
+                            self.0.#name(#(#params),*).await.into_handler().handle_stream_response(request, sink.with(|response| async { Ok(Response::#variant(response)) })).await;
+                        },
+                    }
+                }
+                ReturnType::Simple(..) => {
                     quote! {}
                 }
                 ReturnType::Streaming(_) => {
@@ -327,7 +339,7 @@ impl ToTokens for Rpc {
                     async fn handle(&self, request: Request #generics) -> Response #generics {
                         match request {
                             #(#handle_arms)*
-                            _ => panic!("This is a streaming method, must call handle_streaming")
+                            _ => panic!("This is a streaming method, must call handle_stream_response")
                         }
                     }
                     async fn handle_stream_response<'a, S: Sink<Response #generics, Error = StreamError> + Send + 'a>(

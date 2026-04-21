@@ -14,7 +14,7 @@ use tracing::{Instrument, debug, info, info_span};
 use trait_rpc::client::SimpleClient;
 use trait_rpc::client::websocket::new_websocket_transport;
 use trait_rpc::format::json::Json;
-use trait_rpc::server::StreamError;
+use trait_rpc::server::{IntoHandler, StreamError};
 use trait_rpc::server::axum::Axum;
 use trait_rpc::stream::client::StreamClient;
 use trait_rpc::{Rpc, client};
@@ -24,6 +24,15 @@ trait Service {
     fn simple_get() -> String;
     fn simple_set(value: u64);
     fn stream() -> Stream<u64>;
+    fn sub_service(id: u64) -> impl SubService;
+}
+
+// test subservices also work as expected
+#[rpc]
+trait SubService {
+    fn get() -> u64;
+    fn set(value: String);
+    fn subscribe() -> Stream<u64>;
 }
 
 #[derive(Default)]
@@ -52,6 +61,27 @@ impl ServiceServer for ServiceImpl {
             sink.send(i).await.expect("failed to send value");
         }
     }
+
+    async fn sub_service(&self, id: u64) -> impl IntoHandler<SubService> {
+        (self, id)
+    }
+}
+
+impl SubServiceServer for (&ServiceImpl, u64) {
+    async fn get(&self) -> u64 {
+        42
+    }
+
+    async fn set(&self, _value: String) {
+
+    }
+
+    async fn subscribe<'a>(&'a self, sink: impl Sink<u64, Error=StreamError> + Send + 'a) {
+        let mut sink = pin!(sink);
+        for i in 0..10 {
+            sink.send(i).await.expect("failed to send value");
+        }
+    }
 }
 
 async fn run_server(
@@ -66,6 +96,7 @@ async fn run_server(
             .state(state)
             .allow_json()
             .allow_cbor()
+            .enable_websockets()
             .build(),
     );
 
@@ -111,6 +142,9 @@ async fn websocket_test() {
         executor.spawn(test_simple_get(&client)),
         executor.spawn(test_simple_set(&client, &state)),
         executor.spawn(test_stream(&client)),
+        executor.spawn(test_sub_get(&client)),
+        executor.spawn(test_sub_set(&client)),
+        executor.spawn(test_sub_subscribe(&client)),
     ];
     let tests = tests
         .into_iter()
@@ -158,6 +192,27 @@ async fn test_stream(client: &Client) {
             .expect("stream closed early")
             .expect("failed to get value");
         assert_eq!(i, value);
-        info!("Received {i}");
+    }
+}
+
+async fn test_sub_get(client: &Client) {
+    let response = client.sub_service(2).get().await;
+    let response = response.expect("Failed to get response");
+    assert_eq!(response, 42);
+}
+
+async fn test_sub_set(client: &Client) {
+    client.sub_service(5).set("foo".to_string()).await.expect("Failed to set value");
+}
+
+async fn test_sub_subscribe(client: &Client) {
+    let mut stream = client.sub_service(67).subscribe().await.expect("Failed to set value");
+    for i in 0..10 {
+        let value = stream
+            .next()
+            .await
+            .expect("stream closed early")
+            .expect("failed to get value");
+        assert_eq!(i, value);
     }
 }

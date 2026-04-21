@@ -16,7 +16,7 @@ mod api_service {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -67,7 +67,7 @@ mod api_service {
     impl ::trait_rpc::Request for Request {
         fn is_streaming_response(&self) -> bool {
             match self {
-                Self::Users(..) => false,
+                Self::Users(.., request) => request.is_streaming_response(),
                 Self::Login(..) => false,
             }
         }
@@ -124,7 +124,7 @@ mod api_service {
                 Request::Login(username, password) => {
                     Response::Login(self.0.login(username, password).await)
                 }
-                _ => panic!("This is a streaming method, must call handle_streaming"),
+                _ => panic!("This is a streaming method, must call handle_stream_response"),
             }
         }
         async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
@@ -133,6 +133,9 @@ mod api_service {
             sink: S,
         ) {
             match request {
+                Request::Users(request) => {
+                    self.0.users().await.into_handler().handle_stream_response(request, sink.with(|response| async { Ok(Response::Users(response)) })).await;
+                }
                 _ => panic!("This is not a streaming method, must call handle"),
             }
         }
@@ -257,7 +260,7 @@ mod users_service {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -314,8 +317,8 @@ mod users_service {
             match self {
                 Self::New(..) => false,
                 Self::List(..) => false,
-                Self::ById(..) => false,
-                Self::Current(..) => false,
+                Self::ById(.., request) => request.is_streaming_response(),
+                Self::Current(.., request) => request.is_streaming_response(),
             }
         }
 
@@ -392,7 +395,7 @@ mod users_service {
                         .await;
                     Response::Current(response)
                 }
-                _ => panic!("This is a streaming method, must call handle_streaming"),
+                _ => panic!("This is a streaming method, must call handle_stream_response"),
             }
         }
         async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
@@ -401,6 +404,18 @@ mod users_service {
             sink: S,
         ) {
             match request {
+                Request::ById(id, request) => {
+                    self.0.by_id(id).await.into_handler().handle_stream_response(request, sink.with(|response| async { Ok(Response::ById(response)) })).await;
+                }
+                Request::Current(token, request) => {
+                    self
+                        .0
+                        .current(token)
+                        .await
+                        .into_handler()
+                        .handle_stream_response(request, sink.with(|response| async { Ok(Response::Current(response)) }))
+                        .await;
+                }
                 _ => panic!("This is not a streaming method, must call handle"),
             }
         }
@@ -601,7 +616,7 @@ mod user_service {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -707,7 +722,7 @@ mod user_service {
                 Request::Get() => Response::Get(self.0.get().await),
                 Request::Update(user) => Response::Update(self.0.update(user).await),
                 Request::Delete() => Response::Delete(self.0.delete().await),
-                _ => panic!("This is a streaming method, must call handle_streaming"),
+                _ => panic!("This is a streaming method, must call handle_stream_response"),
             }
         }
         async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(

@@ -16,7 +16,7 @@ mod todo_service {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -132,7 +132,7 @@ mod todo_service {
                 Request::GetTodos() => Response::GetTodos(self.0.get_todos().await),
                 Request::GetTodo(name) => Response::GetTodo(self.0.get_todo(name).await),
                 Request::NewTodo(todo) => Response::NewTodo(self.0.new_todo(todo).await),
-                _ => panic!("This is a streaming method, must call handle_streaming"),
+                _ => panic!("This is a streaming method, must call handle_stream_response"),
             }
         }
         async fn handle_stream_response<'a, S: Sink<Response, Error = StreamError> + Send + 'a>(
