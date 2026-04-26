@@ -29,7 +29,7 @@ pub mod tokio_websocket;
 pub use tokio_websocket as websocket;
 
 #[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
-mod wasm_websocket;
+pub mod wasm_websocket;
 #[cfg(all(feature = "websocket-client", target_arch = "wasm32"))]
 pub use wasm_websocket as websocket;
 #[cfg(all(feature = "reqwest-blocking", target_arch = "wasm32"))]

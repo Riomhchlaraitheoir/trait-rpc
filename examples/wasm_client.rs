@@ -15,7 +15,7 @@ fn main() {
                         .method("POST")
                         .build()
                 )
-                .format(Json)
+                .format(&Json)
                 .build()
         );
         for todo in client.get_todos().await.expect("get_todos failed") {
