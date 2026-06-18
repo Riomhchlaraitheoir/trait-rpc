@@ -1,6 +1,5 @@
 //! Defines a websocket client
 
-use crate::client::StreamTransport;
 use crate::format::IsFormat;
 use crate::stream::client::StreamClient;
 use futures::{Sink, SinkExt, StreamExt};
