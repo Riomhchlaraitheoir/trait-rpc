@@ -247,7 +247,7 @@ where
                     .ok_or_else(|| Error::UnsupportedSubprotocol(protocols.clone()))?;
                 let format = formats
                     .iter()
-                    .find(|format| format.content_type() == protocol)
+                    .find(|format| format.subprotocol() == protocol)
                     .ok_or(Error::UnsupportedSubprotocol(protocols))?;
                 let format: RpcFormat<R> = *format;
                 return Ok(ws.on_upgrade(move |socket|
