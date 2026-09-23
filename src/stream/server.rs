@@ -226,7 +226,6 @@ mod test {
     use crate::server::StreamError;
     use crate::stream::ConnectionMessage;
     use crate::stream::server::handle_formatted_requests;
-    use crate::stream::server::test::test_rpc::{Request, Response};
     use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
     use futures::{Sink, SinkExt, Stream, StreamExt};
     use macros::rpc;
@@ -239,10 +238,12 @@ mod test {
 
     const FIBONACCI_LIMIT: u32 = 1000;
 
+    use test_rpc::{Request, Response};
+
     #[rpc(trait_rpc = crate)]
     trait TestRpc {
         fn simple_call(id: u32) -> String;
-        fn fibonacci() -> Stream<u32>;
+        fn fibonacci() -> impl Stream<u32>;
     }
 
     impl PartialEq for test_rpc::Response {

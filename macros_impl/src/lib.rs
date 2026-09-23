@@ -38,7 +38,6 @@ struct Method {
 #[derive(Debug, PartialEq, Eq)]
 enum ReturnType {
     Simple(Type),
-    Nested { service: Path },
     Streaming(Type),
 }
 

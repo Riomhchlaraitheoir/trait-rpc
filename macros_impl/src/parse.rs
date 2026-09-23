@@ -1,8 +1,10 @@
+use quote::ToTokens;
 use crate::{Args, Method, Rpc};
 use syn::{
     Attribute, Expr, FnArg, GenericArgument, ItemTrait, Meta, MetaNameValue, PathArguments,
-    PathSegment, ReturnType, TraitItem, TraitItemFn, Type, TypeParamBound, TypePath, parse_quote,
+    PathSegment, ReturnType, TraitItem, TraitItemFn, Type, TypeParamBound, parse_quote,
 };
+use syn::spanned::Spanned;
 
 /// This contains any args in the attribute macro invocation that may affect parsing
 // There are no such args for now, but we will keep this just in case tha changes
@@ -75,34 +77,11 @@ impl Parser {
             ReturnType::Default => Ok(super::ReturnType::Simple(parse_quote! {()})),
             ReturnType::Type(_, ty) => {
                 if let Type::ImplTrait(ty) = &*ty {
-                    if let Some(first) = ty.bounds.first() {
-                        if ty.bounds.len() > 1 {
-                            return Err(syn::Error::new_spanned(
-                                &ty.bounds,
-                                "cannot specify multiple bounds here",
-                            ));
-                        }
-                        if let TypeParamBound::Trait(bound) = first {
-                            if bound.lifetimes.is_some() {
-                                return Err(syn::Error::new_spanned(
-                                    &bound.lifetimes,
-                                    "lifetimes not supported here",
-                                ));
-                            }
-                            Ok(super::ReturnType::Nested {
-                                service: bound.path.clone(),
-                            })
-                        } else {
-                            Err(syn::Error::new_spanned(ty, "unsupported bound"))
-                        }
-                    } else {
-                        Err(syn::Error::new_spanned(ty, "no bounds found"))
-                    }
-                } else {
-                    if let Type::Path(TypePath { qself: None, path }) = &*ty
-                        && path.segments.len() == 1
+                    if ty.bounds.len() == 1 &&
+                        let TypeParamBound::Trait(t) = &ty.bounds[0] &&
+                        t.path.segments.len() == 1
                     {
-                        let PathSegment { ident, arguments } = &path.segments[0];
+                        let PathSegment { ident, arguments } = &t.path.segments[0];
                         if ident == "Stream"
                             && let PathArguments::AngleBracketed(args) = arguments
                             && args.args.len() == 1
@@ -111,6 +90,8 @@ impl Parser {
                             return Ok(super::ReturnType::Streaming(ty.clone()));
                         }
                     }
+                    Err(syn::Error::new(ty.span(), format!("unsupported impl return: {}", ty.to_token_stream())))
+                } else {
                     Ok(super::ReturnType::Simple(*ty))
                 }
             }
@@ -151,8 +132,7 @@ mod test {
 
     return_type_tests![
         unit: crate::ReturnType::Simple(Type::Tuple(TypeTuple { paren_token: Paren::default(),elems: Punctuated::default(),})) => {},
-        simple: crate::ReturnType::Simple(Type::Path(parse_quote!(String))) => {-> String},
-        service: crate::ReturnType::Nested {  service: parse_quote!(SubService) } => { -> impl SubService }
+        simple: crate::ReturnType::Simple(Type::Path(parse_quote!(String))) => {-> String}
     ];
 
     #[allow(clippy::needless_pass_by_value)]

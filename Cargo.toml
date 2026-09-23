@@ -86,19 +86,11 @@ name = "blocking_client"
 required-features = ["reqwest-blocking"]
 
 [[example]]
-name = "nested_client"
-required-features = ["reqwest", "__test"]
-
-[[example]]
 name = "wasm_client"
 required-features = ["browser", "browser-json"]
 
 [[example]]
 name = "todo_server"
-required-features = ["axum"]
-
-[[example]]
-name = "nested_server"
 required-features = ["axum"]
 
 [[example]]

@@ -41,6 +41,11 @@ use {
 };
 
 /// A service which serves an RPC service in multiple formats as part of an axum server
+///
+/// The Server type is derive from each request, this means that for simple requests a server is
+/// created, handles the request and is dropped. Alternatively, for a websocket connection, the
+/// server is created and handles each request concurrently until the connection is closed and it
+/// is dropped
 #[derive(Builder)]
 pub struct Axum<R, Server, State>
 where

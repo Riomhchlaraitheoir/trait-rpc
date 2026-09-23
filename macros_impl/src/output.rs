@@ -2,7 +2,7 @@ use crate::{ReturnType, Rpc};
 use convert_case::ccase;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{Field, FieldMutability, Generics, Visibility, parse_quote, LitStr};
+use syn::{Field, FieldMutability, Generics, Visibility, LitStr};
 
 macro_rules! ident_ccase {
     ($case:ident, $ident:expr) => {
@@ -70,7 +70,7 @@ impl ToTokens for Rpc {
             .map(|method| {
                 let snake_name = method.name.to_string();
                 let name = ident_ccase!(pascal, method.name);
-                let mut fields: Vec<_> = method
+                let fields: Vec<_> = method
                     .args
                     .iter()
                     .map(|pat| Field {
@@ -83,18 +83,7 @@ impl ToTokens for Rpc {
                     })
                     .collect();
                 let streaming = matches!(method.ret, ReturnType::Streaming(_));
-                let is_streaming = if let ReturnType::Nested { service: ret } = &method.ret {
-                    fields.push(parse_quote! {
-                        <#ret as Rpc>::Request
-                    });
-                    quote!(
-                        Self::#name(.., request) => request.is_streaming_response()
-                    )
-                } else {
-                    quote!(
-                        Self::#name(..) => #streaming
-                    )
-                };
+                let is_streaming = quote!(Self::#name(..) => #streaming);
                 (
                     quote!(
                         #[serde(rename = #snake_name)]
@@ -110,9 +99,6 @@ impl ToTokens for Rpc {
             let name = ident_ccase!(pascal, method.name);
             let ret = match &method.ret {
                 ReturnType::Simple(ty) | ReturnType::Streaming(ty) => ty.clone(),
-                ReturnType::Nested { service: path } => {
-                    parse_quote!(<#path as Rpc>::Response)
-                }
             };
             quote!(
                 #[serde(rename = #snake_name)]
@@ -122,15 +108,7 @@ impl ToTokens for Rpc {
         let request_to_name = self.methods.iter().map(|method| {
             let name = method.name.to_string();
             let variant = ident_ccase!(pascal, method.name);
-            if let ReturnType::Nested { .. } = method.ret {
-                quote!(Self::#variant(.., nested) => {
-                    let mut name = concat!(#name, ".").to_string();
-                    name.push_str(nested.name().as_ref());
-                    Cow::Owned(name)
-                })
-            } else {
-                quote!(Self::#variant(..) => Cow::Borrowed(#name))
-            }
+            quote!(Self::#variant(..) => Cow::Borrowed(#name))
         });
         let response_to_name = self.methods.iter().map(|method| {
             let name = method.name.to_string();
@@ -152,12 +130,6 @@ impl ToTokens for Rpc {
                         fn #name(&self #(,#params)*) -> impl Future<Output=#ret> + Send;
                     }
                 }
-                ReturnType::Nested { service: path } => {
-                    quote! {
-                        #docs
-                        fn #name(&self #(,#params)*) -> impl Future<Output = impl IntoHandler<#path>> + Send;
-                    }
-                }
                 ReturnType::Streaming(ret) => {
                     quote! {
                         #docs
@@ -175,14 +147,6 @@ impl ToTokens for Rpc {
             let variant = ident_ccase!(pascal, method.name);
             let params = method.args.iter().map(|pat| &pat.pat).collect::<Vec<_>>();
             let handle = match &method.ret {
-                ReturnType::Nested { service: _ } => {
-                    quote! {
-                        Request::#variant(#(#params, )*request) => {
-                            let response = self.0.#name(#(#params),*).await.into_handler().handle(request).await;
-                            Response::#variant(response)
-                        },
-                    }
-                }
                 ReturnType::Simple(_) => {
                     quote! {
                         Request::#variant(#(#params),*) => Response::#variant(self.0.#name(#(#params),*).await),
@@ -193,13 +157,6 @@ impl ToTokens for Rpc {
                 }
             };
             let streaming_handle = match &method.ret {
-                ReturnType::Nested { .. } => {
-                    quote! {
-                        Request::#variant(#(#params, )*request) => {
-                            self.0.#name(#(#params),*).await.into_handler().handle_stream_response(request, sink.with(|response| async { Ok(Response::#variant(response)) })).await;
-                        },
-                    }
-                }
                 ReturnType::Simple(..) => {
                     quote! {}
                 }
@@ -407,12 +364,6 @@ impl Rpc {
             let docs = quote! {
                 #(#[doc = #docs])*
             };
-            let client = if is_async {
-                format_ident!("AsyncClient")
-            } else {
-                format_ident!("BlockingClient")
-            };
-            let new_client = ident_ccase!(snake, client);
             match &method.ret {
                 ReturnType::Simple(ret) => {
                     quote! {
@@ -422,31 +373,6 @@ impl Rpc {
                                 Response::#variant(value) => Ok(value),
                                 other => Err(WrongResponseType::new(#name_str, other.fn_name()).into()),
                             }
-                        }
-                    }
-                }
-                ReturnType::Nested { service: nested } => { // TODO account for sub-service error
-                    let to_inner = format_ident!("{name}_to_inner");
-                    let to_outer = format_ident!("{name}_to_outer");
-                    let variant = ident_ccase!(pascal, name);
-                    let args = method.args.iter().map(|pat| &pat.pat).collect::<Vec<_>>();
-                    let types = method.args.iter().map(|pat| &pat.ty).collect::<Vec<_>>();
-                    quote! {
-                        #docs
-                        pub fn #name(&self #(, #params)*) -> <#nested as Rpc>::#client<MappedClient<_Client, <#nested as Rpc>::Request, Request, <#nested as Rpc>::Response, Response, (#(#types,)*)>> {
-                            #nested::#new_client(MappedClient::new(self.0.clone(), (#(#args,)*), Self::#to_inner, Self::#to_outer))
-                        }
-
-                        fn #to_inner(outer: Result<Response, WrongResponseType>) -> Result<<#nested as Rpc>::Response, WrongResponseType> {
-                            match outer {
-                                Ok(Response::#variant(inner)) => Ok(inner),
-                                Ok(other) => Err(WrongResponseType::new(#name_str, other.fn_name()).into()),
-                                Err(err) => Err(err.in_subservice(#name_str)),
-                            }
-                        }
-
-                        fn #to_outer((#(#args,)*): (#(#types,)*), inner: <#nested as Rpc>::Request) -> Request {
-                            Request::#variant(#(#args,)*inner)
                         }
                     }
                 }
