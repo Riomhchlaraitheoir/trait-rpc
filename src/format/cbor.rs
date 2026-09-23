@@ -15,6 +15,9 @@ impl IsFormat for Cbor {
     fn content_type(&self) -> &'static str {
         CONTENT_TYPE
     }
+    fn subprotocol(&self) -> &'static str {
+        "cbor"
+    }
 }
 
 impl<Read, Write> Format<Read, Write> for Cbor

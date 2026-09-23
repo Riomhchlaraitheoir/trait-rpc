@@ -16,6 +16,9 @@ pub mod cbor;
 pub trait IsFormat {
     /// The HTTP content-type related to this format
     fn content_type(&self) -> &'static str;
+
+    /// The string that is used in websocket subprotocol
+    fn subprotocol(&self) -> &'static str;
 }
 
 /// A format which is able to deserialise `Read` and serialise `Write`

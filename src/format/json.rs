@@ -15,6 +15,9 @@ impl IsFormat for Json {
     fn content_type(&self) -> &'static str {
         CONTENT_TYPE
     }
+    fn subprotocol(&self) -> &'static str {
+        "json"
+    }
 }
 
 impl<Read, Write> Format<Read, Write> for Json

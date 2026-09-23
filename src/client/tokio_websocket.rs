@@ -25,7 +25,7 @@ pub async fn new_websocket_transport(
 ) -> Result<StreamClient, WebsocketError> {
     let (mut websocket, _) = connect_async(
         ClientRequestBuilder::new(url.as_ref().parse().expect("failed to parse url"))
-            .with_sub_protocol(format.content_type()),
+            .with_sub_protocol(format.subprotocol()),
     )
     .await?;
     let (mut request_sender, request_receiver) = unbounded();

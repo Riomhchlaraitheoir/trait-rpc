@@ -233,7 +233,7 @@ where
                 let protocols: Vec<_> = formats
                     .iter()
                     .copied()
-                    .map(IsFormat::content_type)
+                    .map(IsFormat::subprotocol)
                     .collect();
                 ws = ws.protocols(protocols.clone());
                 let protocol = ws

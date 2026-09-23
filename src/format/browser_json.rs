@@ -19,6 +19,9 @@ impl IsFormat for BrowserJson {
     fn content_type(&self) -> &'static str {
         CONTENT_TYPE
     }
+    fn subprotocol(&self) -> &'static str {
+        "json"
+    }
 }
 
 impl<Read, Write> Format<Read, Write> for BrowserJson

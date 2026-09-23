@@ -20,7 +20,7 @@ pub async fn new_websocket_transport(
     url: impl AsRef<str>,
     format: impl IsFormat + 'static,
 ) -> Result<StreamClient, WsErr> {
-    let (_meta, stream) = WsMeta::connect(url, Some(vec![format.content_type()])).await?;
+    let (_meta, stream) = WsMeta::connect(url, Some(vec![format.subprotocol()])).await?;
     let (sink, stream) = stream.split();
     let stream = stream.filter_map(|message| async {
         match message {
