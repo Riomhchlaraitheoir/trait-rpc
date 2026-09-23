@@ -12,7 +12,6 @@ use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bon::__::IsUnset;
 use bon::Builder;
-use futures::FutureExt;
 use futures::future::BoxFuture;
 use std::convert::Infallible;
 use std::fmt::Debug;
@@ -186,11 +185,18 @@ where
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        Box::pin(
-            self.call_internal(req)
-                .map(Ok)
-                .instrument(info_span!("server", service = R::service_name())),
-        )
+        Box::pin({
+            let call = self.call_internal(req);
+            async {
+                Ok(match call.await {
+                    Ok(response) => Ok(response),
+                    Err(err) => {
+                        error!("Websocket rejected: {err:?}");
+                        Err(err)
+                    }
+                })
+            }.instrument(info_span!("server", service = R::service_name()))
+        })
     }
 }
 
@@ -401,6 +407,7 @@ impl From<axum::Error> for StreamError {
     }
 }
 
+#[derive(Debug)]
 /// An Error which may occur when handling RPC requests
 pub enum Error<Server> {
     /// The wrong HTTP method was used
