@@ -2,7 +2,7 @@ use crate::{ReturnType, Rpc};
 use convert_case::ccase;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{Field, FieldMutability, Generics, Visibility, LitStr};
+use syn::{Field, FieldMutability, Visibility, LitStr, GenericParam};
 
 macro_rules! ident_ccase {
     ($case:ident, $ident:expr) => {
@@ -21,24 +21,31 @@ impl ToTokens for Rpc {
         let service = &self.name;
         let module = ident_ccase!(snake, service);
 
-        let generics = &self.generics;
-        let gen_params: Vec<_> = generics.params.iter().collect();
+        let generics_with_bounds = &self.generics;
+        let gen_params_with_bounds: Vec<_> = generics_with_bounds.params.iter().collect();
+        let gen_params: Vec<_> = generics_with_bounds.params.iter().map(|p| {
+            if let GenericParam::Type(p) = p {
+                p.ident.to_token_stream()
+            } else {
+                p.to_token_stream()
+            }
+        }).collect();
         let maybe_generics = if gen_params.is_empty() {
             vec![]
         } else {
             vec![gen_params.clone()]
         };
-        let phantom_data = if generics.params.is_empty() {
+        let generics = quote!(#(<#(#maybe_generics),*>)*);
+
+        let phantom_data = if generics_with_bounds.params.is_empty() {
             TokenStream::new()
         } else {
-            let params = generics.params.iter();
-            quote!((PhantomData<fn() -> (#(#params,)*)>))
+            quote!((PhantomData<fn() -> (#(#gen_params,)*)>))
         };
-        let phantom_data_new = if generics.params.is_empty() {
+        let phantom_data_new = if generics_with_bounds.params.is_empty() {
             TokenStream::new()
         } else {
-            let params = generics.params.iter();
-            quote!(PhantomData::<fn() -> (#(#params,)*)>)
+            quote!(PhantomData::<fn() -> (#(#gen_params,)*)>)
         };
         let docs = if self.docs.is_empty() {
             None
@@ -172,8 +179,8 @@ impl ToTokens for Rpc {
             (handle, streaming_handle)
         }).unzip();
 
-        let async_client_fns = self.client_fns(true, generics);
-        let blocking_client_fns = self.client_fns(false, generics);
+        let async_client_fns = self.client_fns(true, &generics);
+        let blocking_client_fns = self.client_fns(false, &generics);
 
         let trait_rpc_str = trait_rpc.to_token_stream().to_string().replace(' ', "");
         let async_client_docs = [
@@ -204,7 +211,7 @@ impl ToTokens for Rpc {
                 use std::convert::Infallible;
                 use std::marker::PhantomData;
                 use #trait_rpc::{
-                    client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
+                    client::{AsyncClient, BlockingClient, ResponseStream, StreamClient, WrongResponseType},
                     futures::sink::{Sink, SinkExt},
                     futures::stream::{Stream, StreamExt},
                     serde::{Deserialize, Serialize},
@@ -218,9 +225,9 @@ impl ToTokens for Rpc {
                     ///
                 )*
                 #[doc = #service_doc]
-                pub struct #service #generics #phantom_data;
+                pub struct #service #generics_with_bounds #phantom_data;
 
-                impl #generics Rpc for #service #generics #(where #(#maybe_generics: Debug + Send + 'static),*)* {
+                impl #generics_with_bounds Rpc for #service <#(#gen_params),*> #(where #(#maybe_generics: Send + 'static),*)* {
                     type AsyncClient<_Client: AsyncClient<Self::Request, Self::Response>> = #async_client<_Client #(,#gen_params)*>;
                     type BlockingClient<_Client: BlockingClient<Self::Request, Self::Response>> = #blocking_client<_Client #(,#gen_params)*>;
                     type Request = Request #generics;
@@ -236,7 +243,7 @@ impl ToTokens for Rpc {
                     }
                 }
 
-                impl<Server: #server #generics #(, #gen_params: Debug + Send + 'static)*> RpcWithServer<Server> for #service #generics {
+                impl<Server: #server #generics #(, #gen_params_with_bounds)*> RpcWithServer<Server> for #service #generics where #(#gen_params: Send + 'static),* {
                     type Handler = #handler<Server #(, #gen_params)*>;
                     fn handler(server: Server) -> Self::Handler {
                         #handler(server, #phantom_data_new)
@@ -291,7 +298,7 @@ impl ToTokens for Rpc {
                 /// A [Handler](Handler) which handles requests/responses for a given service
                 #[derive(Debug, Clone)]
                 pub struct #handler<_Server #(,#gen_params)*>(_Server, #phantom_data);
-                impl<_Server: #server #generics #(, #gen_params: Debug + Send + 'static)*> Handler for #handler<_Server #(,#gen_params)*> {
+                impl<_Server: #server #generics #(, #gen_params_with_bounds)*> Handler for #handler<_Server #(,#gen_params)*> where #(#gen_params: Send + 'static),* {
                     type Rpc = #service #generics;
                     async fn handle(&self, request: Request #generics) -> Response #generics {
                         match request {
@@ -317,9 +324,9 @@ impl ToTokens for Rpc {
                 )*
                 #(#[doc = #async_client_docs])*
                 #[derive(Debug, Copy, Clone)]
-                pub struct #async_client<_Client #(,#gen_params)*>(_Client, #phantom_data);
+                pub struct #async_client<_Client #(,#gen_params_with_bounds)*>(_Client, #phantom_data);
                 #[allow(clippy::future_not_send)]
-                impl<_Client: AsyncClient<Request #generics, Response #generics> #(, #gen_params)*> #async_client<_Client #(,#gen_params)*> {
+                impl<_Client: AsyncClient<Request #generics, Response #generics> #(, #gen_params_with_bounds)*> #async_client<_Client #(,#gen_params)*> {
                     #(#async_client_fns)*
                 }
 
@@ -343,7 +350,7 @@ impl ToTokens for Rpc {
 }
 
 impl Rpc {
-    fn client_fns(&self, is_async: bool, generics: &Generics) -> impl Iterator<Item = TokenStream> {
+    fn client_fns(&self, is_async: bool, generics: &TokenStream) -> impl Iterator<Item = TokenStream> {
         let await_ = if is_async {
             vec![quote!(.await)]
         } else {

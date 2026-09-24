@@ -16,7 +16,7 @@ mod todo_service {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},

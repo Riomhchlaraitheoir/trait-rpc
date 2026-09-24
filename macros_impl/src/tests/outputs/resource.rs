@@ -7,7 +7,7 @@ mod resources {
     use std::convert::Infallible;
     use std::marker::PhantomData;
     use ::trait_rpc::{
-        client::{AsyncClient, BlockingClient, MappedClient, ResponseStream, StreamClient, WrongResponseType},
+        client::{AsyncClient, BlockingClient, ResponseStream, StreamClient, WrongResponseType},
         futures::sink::{Sink, SinkExt},
         futures::stream::{Stream, StreamExt},
         serde::{Deserialize, Serialize},
@@ -16,10 +16,10 @@ mod resources {
         server::StreamError
     };
     /// This is the [Rpc](::trait_rpc::Rpc) definition for this service
-    pub struct Resources<T>(PhantomData<fn() -> (T,)>);
-    impl<T> Rpc for Resources<T>
+    pub struct Resources<T: Debug>(PhantomData<fn() -> (T,)>);
+    impl<T: Debug> Rpc for Resources<T>
     where
-        T: Debug + Send + 'static,
+        T: Send + 'static,
     {
         type AsyncClient<_Client: AsyncClient<Self::Request, Self::Response>> =
             ResourcesAsyncClient<_Client, T>;
@@ -42,7 +42,7 @@ mod resources {
         }
     }
 
-    impl<Server: ResourcesServer<T>, T: Debug + Send + 'static> RpcWithServer<Server> for Resources<T> {
+    impl<Server: ResourcesServer<T>, T: Debug> RpcWithServer<Server> for Resources<T> where T: Send + 'static {
         type Handler = ResourcesHandler<Server, T>;
         fn handler(server: Server) -> Self::Handler {
             ResourcesHandler(server, PhantomData::<fn() -> (T,)>)
@@ -118,7 +118,7 @@ mod resources {
     /// A [Handler](Handler) which handles requests/responses for a given service
     #[derive(Debug, Clone)]
     pub struct ResourcesHandler<_Server, T>(_Server, (PhantomData<fn() -> (T,)>));
-    impl<_Server: ResourcesServer<T>, T: Debug + Send + 'static> Handler for ResourcesHandler<_Server, T> {
+    impl<_Server: ResourcesServer<T>, T: Debug> Handler for ResourcesHandler<_Server, T> where T: Send + 'static {
         type Rpc = Resources<T>;
         async fn handle(&self, request: Request<T>) -> Response<T> {
             match request {
@@ -145,9 +145,9 @@ mod resources {
     ///
     /// The return value is always wrapped in a result: `Result<T, _Client::Error>` where `T` is the service return value
     #[derive(Debug, Copy, Clone)]
-    pub struct ResourcesAsyncClient<_Client, T>(_Client, (PhantomData<fn() -> (T,)>));
+    pub struct ResourcesAsyncClient<_Client, T: Debug>(_Client, (PhantomData<fn() -> (T,)>));
     #[allow(clippy::future_not_send)]
-         impl<_Client: AsyncClient<Request<T>, Response<T>>, T> ResourcesAsyncClient<_Client, T> {
+         impl<_Client: AsyncClient<Request<T>, Response<T>>, T: Debug> ResourcesAsyncClient<_Client, T> {
         pub async fn subscribe(&self) -> Result<ResponseStream<T, _Client::Error>, _Client::Error> where _Client: StreamClient<Request<T>, Response<T>> {
             let stream = self.0.send_streaming_response(Request::Subscribe()).await?;
             Ok(Box::new(stream.map(|value| {

@@ -5,12 +5,11 @@ use crate::client::{HandleError, ResponseStream, StreamTransport};
 use crate::format::IsFormat;
 use crate::stream::{ConnectionError, ConnectionMessage, message_sink, message_stream};
 use futures::channel::{mpsc, oneshot};
-use futures::future::join_all;
 use futures::lock::Mutex;
-use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt};
+use futures::{join, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use std::collections::HashMap;
 use std::mem;
-use std::pin::{Pin, pin};
+use std::pin::{pin};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use thiserror::Error;
@@ -59,12 +58,11 @@ impl StreamClient {
         format: impl IsFormat,
     ) -> (
         Self,
-        impl Future<Output = Result<(), ClientError<Out::Error>>> + Send + 'static,
+        impl Future<Output = Result<(), ClientError<Out::Error>>> + 'static,
     )
     where
-        Out: Sink<Vec<u8>> + Send + 'static,
-        In: Stream<Item = Vec<u8>> + Send + 'static,
-        Out::Error: Send,
+        Out: Sink<Vec<u8>> + 'static,
+        In: Stream<Item = Vec<u8>> + 'static,
     {
         let (sender, request_receiver) = mpsc::channel(100);
         let sender: RequestSender = Arc::new(Mutex::new(sender));
@@ -78,12 +76,13 @@ impl StreamClient {
             senders.clone(),
         )
         .instrument(info_span!("client response handler"));
-        let job = join_all([
-            Box::pin(request_sender)
-                as Pin<Box<dyn Future<Output = Result<(), ClientError<Out::Error>>> + Send>>,
-            Box::pin(response_handler),
-        ])
-        .map(|results| results.into_iter().collect());
+        let job = async {
+            join![
+                Box::pin(request_sender),
+                Box::pin(response_handler),
+            ]
+        }
+        .map(|(a, b)| a.and(b));
         let client = Self {
             sender,
             senders,
@@ -105,6 +104,7 @@ impl StreamClient {
         while let Some(message) = request_receiver.next().await {
             request_sink.send(message).await?;
         }
+        warn!("request sink closed");
         Ok(())
     }
 
@@ -152,6 +152,7 @@ impl StreamClient {
         for (_, sender) in senders {
             let _ = sender.send(Err(StreamError::ConnectionClosed));
         }
+        warn!("response stream closed");
         Ok(())
     }
 }

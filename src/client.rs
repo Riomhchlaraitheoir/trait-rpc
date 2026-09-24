@@ -10,6 +10,7 @@ use futures::{Stream, StreamExt};
 use std::error::Error;
 use std::fmt::Debug;
 use thiserror::Error;
+use tracing::debug;
 
 /// Implementation for making requests from browser wasm using the Fetch API
 #[cfg(all(feature = "browser", target_arch = "wasm32"))]
@@ -91,7 +92,7 @@ impl Builder {
 }
 
 /// A client implementation for sending requests asynchronously
-pub trait AsyncClient<Req, Resp>: Clone {
+pub trait AsyncClient<Req: Debug, Resp: Debug>: Clone {
     /// The error that can happen during send
     type Error: Error + MaybeWrongResponse + From<WrongResponseType> + 'static;
     /// Send a request and receive a response
@@ -99,7 +100,7 @@ pub trait AsyncClient<Req, Resp>: Clone {
 }
 
 /// A client implementation for sending requests asynchronously
-pub trait StreamClient<Req, Resp>: AsyncClient<Req, Resp> {
+pub trait StreamClient<Req: Debug, Resp: Debug>: AsyncClient<Req, Resp> {
     /// Send a request and receive a response
     fn send_streaming_response(
         &self,
@@ -128,7 +129,7 @@ pub struct SimpleClient<F: 'static, T> {
     transport: T,
 }
 
-impl<F, T, Req, Resp> AsyncClient<Req, Resp> for SimpleClient<F, T>
+impl<F, T, Req: Debug, Resp: Debug> AsyncClient<Req, Resp> for SimpleClient<F, T>
 where
     F: Format<Resp, Req>,
     T: AsyncTransport,
@@ -143,6 +144,7 @@ where
     /// * Failed to serialise/deserialise
     /// * Received the wrong type of response
     async fn send(&self, request: Req) -> Result<Resp, Self::Error> {
+        debug!("Sending request: {:?}", request);
         let request = self.format.write(request).map_err(RpcError::Serialize)?;
         let response = self
             .transport
@@ -153,11 +155,12 @@ where
             .format
             .read(response.as_slice())
             .map_err(RpcError::Deserialize)?;
+        debug!("Received response: {:?}", response);
         Ok(response)
     }
 }
 
-impl<F, T, Req, Resp> StreamClient<Req, Resp> for SimpleClient<F, T>
+impl<F, T, Req: Debug, Resp: Debug> StreamClient<Req, Resp> for SimpleClient<F, T>
 where
     F: Format<Resp, Req> + 'static,
     T: StreamTransport,
@@ -167,6 +170,7 @@ where
         &self,
         request: Req,
     ) -> Result<impl Stream<Item = Result<Resp, Self::Error>> + 'static, Self::Error> {
+        debug!("Sending request: {:?}", request);
         let request = self.format.write(request).map_err(RpcError::Serialize)?;
         let stream = self
             .transport
@@ -179,6 +183,7 @@ where
             let response = format
                 .read(response.as_slice())
                 .map_err(RpcError::Deserialize)?;
+            debug!("Received response: {:?}", response);
             Ok(response)
         });
         Ok(stream)
@@ -274,113 +279,6 @@ pub trait StreamTransport: AsyncTransport {
     ) -> impl Future<
         Output = Result<ResponseStream<Vec<u8>, Self::Error>, Self::Error>,
     > + Send;
-}
-
-/// This is a transport layer used for nesting services
-#[derive(Debug)]
-pub struct MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> {
-    outer: T,
-    args: Args,
-    to_inner: fn(Result<OuterResp, WrongResponseType>) -> Result<InnerResp, WrongResponseType>,
-    to_outer: fn(Args, InnerReq) -> OuterReq,
-}
-
-impl<T: Copy, InnerReq, OuterReq, InnerResp, OuterResp, Args: Copy> Copy
-    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-{
-}
-
-impl<T: Clone, InnerReq, OuterReq, InnerResp, OuterResp, Args: Clone> Clone
-    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-{
-    fn clone(&self) -> Self {
-        Self {
-            outer: self.outer.clone(),
-            args: self.args.clone(),
-            to_inner: self.to_inner,
-            to_outer: self.to_outer,
-        }
-    }
-}
-
-impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-    MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-{
-    #[doc(hidden)]
-    #[must_use]
-    pub fn new(
-        inner: T,
-        args: Args,
-        to_inner: fn(Result<OuterResp, WrongResponseType>) -> Result<InnerResp, WrongResponseType>,
-        to_outer: fn(Args, InnerReq) -> OuterReq,
-    ) -> Self {
-        Self {
-            outer: inner,
-            args,
-            to_inner,
-            to_outer,
-        }
-    }
-}
-impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> AsyncClient<InnerReq, InnerResp>
-    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-where
-    Args: Clone,
-    T: AsyncClient<OuterReq, OuterResp>,
-{
-    type Error = T::Error;
-    async fn send(&self, request: InnerReq) -> Result<InnerResp, Self::Error> {
-        let request = (self.to_outer)(self.args.clone(), request);
-        let response = match self.outer.send(request).await {
-            Ok(response) => Ok(response),
-            Err(err) => Err(err.into_wrong_response()?),
-        };
-        Ok((self.to_inner)(response)?)
-    }
-}
-
-impl<T, InnerReq, OuterReq, InnerResp: 'static, OuterResp: 'static, Args>
-    StreamClient<InnerReq, InnerResp>
-    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-where
-    Args: Clone,
-    T: StreamClient<OuterReq, OuterResp>,
-{
-    async fn send_streaming_response(
-        &self,
-        request: InnerReq,
-    ) -> Result<impl Stream<Item = Result<InnerResp, Self::Error>> + 'static, Self::Error> {
-        let request = (self.to_outer)(self.args.clone(), request);
-        let stream = self.outer.send_streaming_response(request).await?;
-        let to_inner = self.to_inner;
-        Ok(
-            stream.map(move |response| -> Result<InnerResp, Self::Error> {
-                let response = match response {
-                    Ok(response) => Ok(response),
-                    Err(err) => Err(err.into_wrong_response()?),
-                };
-                Ok((to_inner)(response)?)
-            }),
-        )
-    }
-}
-
-impl<T, InnerReq, OuterReq, InnerResp, OuterResp, Args> BlockingClient<InnerReq, InnerResp>
-    for MappedClient<T, InnerReq, OuterReq, InnerResp, OuterResp, Args>
-where
-    Args: Clone,
-    T: BlockingClient<OuterReq, OuterResp>,
-{
-    type Error = T::Error;
-    fn send(&self, request: InnerReq) -> Result<InnerResp, Self::Error> {
-        let request = (self.to_outer)(self.args.clone(), request);
-        let response = match self.outer.send(request) {
-            Ok(response) => Ok(response),
-            Err(err) => Err(err.into_wrong_response()?),
-        };
-        let response = (self.to_inner)(response)?;
-        Ok(response)
-    }
 }
 
 /// This is a error that the client may return after a request
