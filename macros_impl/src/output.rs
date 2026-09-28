@@ -300,6 +300,12 @@ impl ToTokens for Rpc {
                 pub struct #handler<_Server #(,#gen_params)*>(_Server, #phantom_data);
                 impl<_Server: #server #generics #(, #gen_params_with_bounds)*> Handler for #handler<_Server #(,#gen_params)*> where #(#gen_params: Send + 'static),* {
                     type Rpc = #service #generics;
+                    type Server = _Server;
+                    
+                    fn server(&self) -> &Self::Server {
+                        &self.0
+                    }
+                    
                     async fn handle(&self, request: Request #generics) -> Response #generics {
                         match request {
                             #(#handle_arms)*

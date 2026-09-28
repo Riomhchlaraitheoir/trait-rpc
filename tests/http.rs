@@ -1,17 +1,23 @@
 use async_executor::Executor;
+use axum::body::Bytes;
 use axum::extract::{FromRequestParts, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
+use axum::routing::post;
 use macros::rpc;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::time::sleep;
-use trait_rpc::client::SimpleClient;
+use tracing::log;
 use trait_rpc::client::reqwest::Reqwest;
+use trait_rpc::client::SimpleClient;
+use trait_rpc::format::cbor::Cbor;
 use trait_rpc::format::json::Json;
-use trait_rpc::server::axum::Axum;
-use trait_rpc::{Rpc, client};
+use trait_rpc::format::Format;
+use trait_rpc::server::axum::{handle_request, HandleError};
+use trait_rpc::{client, Rpc};
 
 #[rpc]
 trait Service {
@@ -40,16 +46,9 @@ impl ServiceServer for ServiceImpl {
 }
 
 async fn run_server(state: Arc<RwLock<ServerState>>) {
-    let server = axum::Router::new().route_service(
-        "/",
-        Axum::builder()
-            .rpc(PhantomData::<Service>)
-            .server(PhantomData::<ServiceImpl>)
-            .state(state)
-            .allow_json()
-            .allow_cbor()
-            .build(),
-    );
+    let server = axum::Router::new()
+        .route("/", post(handle))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:7456")
         .await
@@ -57,10 +56,27 @@ async fn run_server(state: Arc<RwLock<ServerState>>) {
     axum::serve::serve(listener, server).await.unwrap();
 }
 
+async fn handle(server: ServiceImpl, headers: HeaderMap, bytes: Bytes) -> impl IntoResponse {
+    let result =
+        handle_request::<Service, _>(server, headers, bytes, &[&Json as &dyn Format<_, _>, &Cbor])
+            .await;
+    match result {
+        Ok(response) => response,
+        Err(
+            HandleError::UnsupportedContentType(_)
+            | HandleError::NoContentType
+            | HandleError::InvalidContentType(_),
+        ) => StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response(),
+        Err(HandleError::Deserialise(_)) => StatusCode::BAD_REQUEST.into_response(),
+        Err(HandleError::Serialise(_)) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 type Client = <Service as Rpc>::AsyncClient<SimpleClient<Json, Reqwest>>;
 
 #[tokio::test]
-async fn main() {
+async fn http_test() {
+    simple_logger::SimpleLogger::new().with_level(log::LevelFilter::Debug).init().unwrap();
     let state = Arc::<RwLock<ServerState>>::default();
     let server = spawn(run_server(state.clone()));
     sleep(Duration::from_secs(1)).await;

@@ -120,6 +120,12 @@ mod resources {
     pub struct ResourcesHandler<_Server, T>(_Server, (PhantomData<fn() -> (T,)>));
     impl<_Server: ResourcesServer<T>, T: Debug> Handler for ResourcesHandler<_Server, T> where T: Send + 'static {
         type Rpc = Resources<T>;
+        type Server = _Server;
+
+        fn server(&self) -> &Self::Server {
+            &self.0
+        }
+
         async fn handle(&self, request: Request<T>) -> Response<T> {
             match request {
                 Request::List() => Response::List(self.0.list().await),

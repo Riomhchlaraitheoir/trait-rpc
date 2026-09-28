@@ -1,5 +1,6 @@
 //! Provides support for the CBOR ([JavaScript Object Notation](https://www.json.org/)) format, driven by the WASM API
 
+use std::cell::LazyCell;
 use std::io;
 use std::error::Error as StdError;
 use std::string::FromUtf8Error;
@@ -8,8 +9,14 @@ use serde::Serialize;
 use thiserror::Error;
 use web_sys::js_sys;
 use crate::format::{Format, IsFormat};
+use serde_wasm_bindgen::Serializer;
 
 const CONTENT_TYPE: & str = "application/json";
+thread_local! {
+    static SERIALISER: LazyCell<Serializer> = LazyCell::new(|| {
+        Serializer::new().serialize_large_number_types_as_bigints(true)
+    });
+}
 
 #[derive(Debug, Copy, Clone)]
 /// [JavaScript Object Notation](https://www.json.org/)

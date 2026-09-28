@@ -127,6 +127,12 @@ mod todo_service {
 
     impl<_Server: TodoServiceServer> Handler for TodoServiceHandler<_Server> {
         type Rpc = TodoService;
+        type Server = _Server;
+
+        fn server(&self) -> &Self::Server {
+            &self.0
+        }
+
         async fn handle(&self, request: Request) -> Response {
             match request {
                 Request::GetTodos() => Response::GetTodos(self.0.get_todos().await),

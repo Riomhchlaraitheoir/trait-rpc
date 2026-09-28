@@ -33,6 +33,7 @@ where
     Out: Sink<Vec<u8>, Error: Send> + Send,
     <H::Rpc as Rpc>::Response: Send + Sync,
     <H::Rpc as Rpc>::Request: Send,
+    H::Server: ConnectionHooks<H::Rpc>
 {
     let stream = message_stream(stream, "server");
     let stream = formatted_stream(stream, format);
@@ -59,10 +60,11 @@ async fn handle_formatted_requests<In, Out, H>(
 ) -> Result<(), ServerError<Out::Error>>
 where
     H: Handler + Sync,
-    In: Stream<Item = ConnectionMessage<<H::Rpc as Rpc>::Request>>,
+    In: Stream<Item = ConnectionMessage<<H::Rpc as Rpc>::Request>> + Send,
     Out: Sink<ConnectionMessage<<H::Rpc as Rpc>::Response>, Error: Send> + Send,
     <H::Rpc as Rpc>::Response: Send,
     <H::Rpc as Rpc>::Request: Send,
+    H::Server: ConnectionHooks<H::Rpc>
 {
     let (sender, receiver) = unbounded();
     let receiver = pin!(receiver);
@@ -115,12 +117,13 @@ async fn request_handler<'a, H, In>(
     executor: &Executor<'a>,
 ) where
     H: Handler + Sync,
-    In: Stream<Item = ConnectionMessage<<H::Rpc as Rpc>::Request>>,
+    In: Stream<Item = ConnectionMessage<<H::Rpc as Rpc>::Request>> + Send,
     <H::Rpc as Rpc>::Response: Send,
     <H::Rpc as Rpc>::Request: Send,
+    H::Server: ConnectionHooks<H::Rpc>
 {
     let mut stream = pin!(stream);
-    while let Some(message) = stream.next().await {
+    while let Some(message) = handler.server().await_next(stream.next()).await {
         let (request_id, request) = match message.payload() {
             Ok(request) => request,
             Err(message) => {
@@ -134,12 +137,14 @@ async fn request_handler<'a, H, In>(
         };
 
         debug!("Handling request {request_id:?}: {request:?}");
+        handler.server().request(request_id, &request);
         let streaming = request.is_streaming_response();
         let handler_span = info_span!("handler", request_id, method = request.name().as_ref(), streaming = streaming);
         if streaming {
             let sink = sender.clone();
             let sink = sink.with(move |response| {
                 debug!("Sending stream response for request {request_id:?}: {response:?}");
+                handler.server().response(request_id, true, &response);
                 ready(Ok(ConnectionMessage::Payload {
                     request_id,
                     payload: response,
@@ -173,6 +178,7 @@ async fn request_handler<'a, H, In>(
                 .spawn(
                     async move {
                         let response = handler.handle(request).await;
+                        handler.server().response(request_id, false, &response);
                         sender
                             .send(ConnectionMessage::Payload {
                                 request_id,
@@ -220,12 +226,48 @@ fn formatted_sink<Read, Write, S: Sink<ConnectionMessage<Vec<u8>>>>(
     )
 }
 
+
+/// Defines hooks for a connection-based service (i.e. WebSocket), can be used:
+/// - to kill idle connections
+/// - to log requests and responses
+/// - to track metrics such as request counts or response delays
+pub trait ConnectionHooks<R: Rpc> {
+    /// Wait for the next request or timeout
+    ///
+    /// The request future will yield when the next request arrives, or None if the client closes
+    /// the connection
+    ///
+    /// This function should not be used to inspect the request, use other hooks for that
+    ///
+    /// To cancel waiting and close the connection instead, simply return `None`
+    fn await_next<T>(&self, request: impl Future<Output=Option<T>> + Send) -> impl Future<Output=Option<T>> + Send;
+
+    /// Called after receiving a request, but before it is processed
+    ///
+    /// - `request_id` is the identifier of the request
+    fn request(&self, request_id: u32, request: &<R as Rpc>::Request) {
+        let _ = (request_id, request);
+    }
+
+    /// Called after processing a request, but before sending the response
+    ///
+    /// - `request_id` is the identifier of the request
+    /// - `is_streaming` indicates if this is a streaming response (part of an `impl Stream`)
+    fn response(&self, request_id: u32, is_streaming: bool, response: &<R as Rpc>::Response) {
+        let _ = (request_id, is_streaming, response);
+    }
+}
+
+/// Error signifying that the connection has timed out dues to idling and should be closed
+pub struct Timeout;
+
+
 #[cfg(test)]
 mod test {
     use crate::RpcWithServer;
     use crate::server::StreamError;
     use crate::stream::ConnectionMessage;
-    use crate::stream::server::handle_formatted_requests;
+    use crate::stream::server::{handle_formatted_requests, ConnectionHooks};
     use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
     use futures::{Sink, SinkExt, Stream, StreamExt};
     use macros::rpc;
@@ -257,6 +299,12 @@ mod test {
     }
 
     struct TestImpl;
+
+    impl ConnectionHooks<TestRpc> for TestImpl {
+        async fn await_next<T>(&self, request: impl Future<Output=Option<T>>) -> Option<T> {
+            request.await
+        }
+    }
 
     impl TestRpcServer for TestImpl {
         async fn simple_call(&self, id: u32) -> String {

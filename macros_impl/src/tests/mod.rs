@@ -18,8 +18,7 @@ macro_rules! tests {
 }
 
 fn test_case(input: &'static str, expected: &'static str) {
-    let input: TokenStream = input.parse().expect("Failed to parse input");
-    let input = File::parse.parse2(input).expect("Failed to parse input");
+    let input: File = syn::parse_str(input).expect("failed to parse input");
 
     let actual = {
         let actual: TokenStream = input.items.into_iter().flat_map(|item| {

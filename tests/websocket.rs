@@ -1,23 +1,26 @@
 use async_executor::Executor;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{FromRequestParts, State, WebSocketUpgrade};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::routing::get;
 use futures::{Sink, SinkExt, StreamExt};
 use macros::rpc;
-use std::marker::PhantomData;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::spawn;
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::{oneshot, RwLock};
 use tokio::time::{sleep, timeout};
 use tracing::log::Level;
-use tracing::{Instrument, debug, info, info_span};
-use trait_rpc::client::SimpleClient;
+use tracing::{debug, info, info_span, Instrument};
 use trait_rpc::client::websocket::new_websocket_transport;
+use trait_rpc::client::SimpleClient;
 use trait_rpc::format::json::Json;
-use trait_rpc::server::{StreamError};
-use trait_rpc::server::axum::Axum;
+use trait_rpc::server::axum::{handle_websocket, WebsocketError};
+use trait_rpc::server::StreamError;
 use trait_rpc::stream::client::StreamClient;
-use trait_rpc::{Rpc, client};
+use trait_rpc::stream::server::ConnectionHooks;
+use trait_rpc::{client, Rpc};
 
 #[rpc]
 trait Service {
@@ -54,21 +57,19 @@ impl ServiceServer for ServiceImpl {
     }
 }
 
+impl ConnectionHooks<Service> for ServiceImpl {
+    async fn await_next<T>(&self, request: impl Future<Output=Option<T>> + Send) -> Option<T> {
+        tokio::time::timeout(Duration::from_mins(10), request).await.ok().unwrap_or_default()
+    }
+}
+
 async fn run_server(
     state: Arc<RwLock<ServerState>>,
     shutdown_signal: impl Future<Output = ()> + Send + 'static,
 ) {
-    let server = axum::Router::new().route_service(
-        "/",
-        Axum::builder()
-            .rpc(PhantomData::<Service>)
-            .server(PhantomData::<ServiceImpl>)
-            .state(state)
-            .allow_json()
-            .allow_cbor()
-            .enable_websockets()
-            .build(),
-    );
+    let server = axum::Router::new()
+        .route("/", get(handle))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:9865")
         .await
@@ -78,6 +79,16 @@ async fn run_server(
         .with_graceful_shutdown(shutdown_signal)
         .await
         .unwrap();
+}
+
+async fn handle(server: ServiceImpl, websocket: WebSocketUpgrade) -> impl IntoResponse {
+    let result = handle_websocket(websocket, server, &[&Json]);
+    match result {
+        Ok(response) => response,
+        Err(WebsocketError::UnsupportedFormat) => {
+            StatusCode::BAD_REQUEST.into_response()
+        }
+    }
 }
 
 type Client = <Service as Rpc>::AsyncClient<SimpleClient<Json, StreamClient>>;

@@ -18,8 +18,8 @@ unsafe_code = "forbid"
 workspace = true
 
 [workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn" }
+nursery = { level = "warn" }
 
 [features]
 axum = ["dep:axum", "dep:tower"]
@@ -31,7 +31,7 @@ websocket-server = ["axum?/ws", "async-executor"]
 json = ["dep:serde_json"]
 browser-json = ["dep:serde-wasm-bindgen", "dep:web-sys", "dep:wasm-bindgen-futures"]
 cbor = ["dep:ciborium"]
-__test = ["axum", "reqwest", "reqwest-blocking", "json", "cbor", "websocket-client", "dep:tokio", "websocket-server", "tracing-loki"]
+__test = ["axum", "reqwest", "reqwest-blocking", "json", "cbor", "websocket-client", "dep:tokio", "websocket-server"]
 __wasm_test = ["reqwest", "json", "cbor", "browser", "browser-json", "websocket-client"]
 
 [dependencies]
@@ -44,9 +44,8 @@ macros = { package = "trait-rpc-macros", path = "macros" }
 futures = { version = "0.3.31", features = ["unstable", "bilock"] }
 bon = "3.8.1"
 tracing = "0.1.44"
+pin-project = "1.1.13"
 async-executor = { version = "1.13.3", optional = true }
-pin-project = "1.1.10"
-tracing-loki = { version = "0.2.6", optional = true }
 
 # Formats
 serde_json = { version = "1.0.145", optional = true }

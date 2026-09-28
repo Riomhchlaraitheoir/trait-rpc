@@ -2,7 +2,7 @@
 
 use trait_rpc::client::websocket::new_websocket_transport;
 use trait_rpc::format::json::Json;
-use trait_rpc::{Rpc, client};
+use trait_rpc::{client, Rpc};
 
 include!("traits/todo.rs");
 

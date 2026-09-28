@@ -47,7 +47,7 @@ pub trait Rpc: Sized {
 /// Represents a [Rpc] which can be served by `Server`
 pub trait RpcWithServer<Server>: Rpc {
     /// The handler type for this server
-    type Handler: Handler<Rpc = Self>;
+    type Handler: Handler<Rpc = Self, Server = Server>;
     /// Create a new handler from the given server
     fn handler(server: Server) -> Self::Handler;
 }

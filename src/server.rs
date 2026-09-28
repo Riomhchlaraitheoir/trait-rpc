@@ -15,6 +15,12 @@ pub mod axum;
 pub trait Handler: Send {
     /// The Rpc service served by this handler
     type Rpc: Rpc;
+    /// Underlying server type
+    type Server;
+
+    /// Get underlying server
+    fn server(&self) -> &Self::Server;
+
     /// takes the request and returns a response, see [trait documentation](Self) for details
     fn handle(
         &self,
