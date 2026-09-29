@@ -11,6 +11,7 @@ pub mod client;
 pub mod format;
 #[cfg(any(feature = "websocket-server", feature = "websocket-client"))]
 pub mod stream;
+mod ext;
 
 pub use macros::rpc;
 pub use crate::client::{AsyncTransport, BlockingTransport, RpcError};

@@ -24,7 +24,7 @@ async fn run() {
         client::builder()
             .non_blocking()
             .transport(
-                new_websocket_transport("ws://127.0.0.1:8080", Json)
+                new_websocket_transport("ws://127.0.0.1:8080", Json, || {})
                     .await
                     .expect("failed to start connection"),
             )

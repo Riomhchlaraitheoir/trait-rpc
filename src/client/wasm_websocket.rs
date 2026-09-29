@@ -9,6 +9,7 @@ use std::future::ready;
 use thiserror::Error;
 use tracing::{debug, error};
 use wasm_bindgen_futures::spawn_local;
+use crate::ext::StreamWithOnCloseHook;
 
 /// Error from websocket
 #[derive(Debug, Error)]
@@ -26,6 +27,7 @@ pub enum WebsocketError {
 pub async fn new_websocket_transport(
     url: impl AsRef<str>,
     format: impl IsFormat + 'static,
+    on_close: impl FnOnce() + 'static
 ) -> Result<StreamClient, WebsocketError> {
     debug!("Connecting websocket to {}", url.as_ref());
     let socket = WebSocket::open_with_protocol(url.as_ref(), format.subprotocol())
@@ -49,6 +51,8 @@ pub async fn new_websocket_transport(
             }
         })
     });
+
+    let response_stream = StreamWithOnCloseHook::new(response_stream, on_close);
 
     let (client, job) = StreamClient::new(request_sink, response_stream, format);
     spawn_local(async {

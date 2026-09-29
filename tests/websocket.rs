@@ -110,7 +110,7 @@ async fn websocket_test() {
     let client = client::builder()
         .non_blocking()
         .transport(
-            new_websocket_transport("ws://localhost:9865/", Json)
+            new_websocket_transport("ws://localhost:9865/", Json, ||{})
                 .await
                 .expect("Failed to create transport"),
         )

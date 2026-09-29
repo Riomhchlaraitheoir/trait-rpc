@@ -22,6 +22,7 @@ use std::pin::pin;
 pub async fn new_websocket_transport(
     url: impl AsRef<str>,
     format: impl IsFormat + 'static,
+    on_close: impl FnOnce() + Send + 'static
 ) -> Result<StreamClient, WebsocketError> {
     let (mut websocket, _) = connect_async(
         ClientRequestBuilder::new(url.as_ref().parse().expect("failed to parse url"))
@@ -38,7 +39,10 @@ pub async fn new_websocket_transport(
             let next_response = response_receiver.next();
             let next_response = pin!(next_response);
             match select(next_response, next_request).await {
-                Either::Left((None, _)) => break,
+                Either::Left((None, _)) => {
+                    on_close();
+                    break
+                },
                 Either::Left((Some(bytes), _)) => {
                     let result = websocket.send(Message::binary(bytes)).await;
                     if let Err(error) = result {

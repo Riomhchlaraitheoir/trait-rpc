@@ -8,12 +8,16 @@ use futures::channel::{mpsc, oneshot};
 use futures::lock::Mutex;
 use futures::{join, FutureExt, Sink, SinkExt, Stream, StreamExt};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::mem;
 use std::pin::{pin};
-use std::sync::Arc;
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::task::Poll;
+use futures::channel::oneshot::{Canceled};
+use futures::future::Either;
 use thiserror::Error;
-use tracing::{Instrument, debug, info_span, warn};
+use tracing::{Instrument, debug, info_span, warn, error};
 
 /// A client which communicates using a websocket connection
 #[derive(Debug, Clone)]
@@ -25,7 +29,11 @@ pub struct StreamClient {
     next_id: Arc<AtomicU32>,
 }
 
-type RequestSender = Arc<Mutex<mpsc::Sender<ConnectionMessage<Vec<u8>>>>>;
+/// Indicates the connection closed unexpectedly
+#[derive(Debug)]
+struct ConnClosed;
+
+type RequestSender = Arc<Mutex<mpsc::Sender<(ConnectionMessage<Vec<u8>>, oneshot::Sender<ConnClosed>)>>>;
 type SenderMap = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Vec<u8>, StreamError>>>>>;
 type StreamSenderMap =
     Arc<Mutex<HashMap<u32, mpsc::UnboundedSender<Result<Vec<u8>, StreamError>>>>>;
@@ -63,6 +71,7 @@ impl StreamClient {
     where
         Out: Sink<Vec<u8>> + 'static,
         In: Stream<Item = Vec<u8>> + 'static,
+        Out::Error: Display
     {
         let (sender, request_receiver) = mpsc::channel(100);
         let sender: RequestSender = Arc::new(Mutex::new(sender));
@@ -94,15 +103,22 @@ impl StreamClient {
     }
 
     async fn request_sender<Out>(
-        mut request_receiver: mpsc::Receiver<ConnectionMessage<Vec<u8>>>,
+        mut request_receiver: mpsc::Receiver<(ConnectionMessage<Vec<u8>>, oneshot::Sender<ConnClosed>)>,
         request_sink: Out,
     ) -> Result<(), ClientError<Out::Error>>
     where
         Out: Sink<Vec<u8>>,
+        Out::Error: Display
     {
         let mut request_sink = pin!(message_sink(request_sink, "client"));
-        while let Some(message) = request_receiver.next().await {
-            request_sink.send(message).await?;
+        while let Some((message, error)) = request_receiver.next().await {
+            match request_sink.send(message).await {
+                Ok(()) => {}
+                Err(err) => {
+                    error!("Websocket error: {err}");
+                    error.send(ConnClosed).expect("Failed to send error");
+                }
+            }
         }
         warn!("request sink closed");
         Ok(())
@@ -171,21 +187,36 @@ impl AsyncTransport for StreamClient {
                 received: content_type.to_string(),
             });
         }
-        let (sender, receiver) = oneshot::channel();
+        let (sender, mut receiver) = oneshot::channel();
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.senders.lock().await.insert(request_id, sender);
+        let (error_sender, error_receiver) = oneshot::channel();
         self.sender
             .lock()
             .await
-            .send(ConnectionMessage::Payload {
+            .send((ConnectionMessage::Payload {
                 request_id,
                 payload: request,
-            })
+            }, error_sender))
             .await
             .map_err(|_| StreamError::RequestChannelClosed)?;
-        Ok(Ok(receiver
-            .await
-            .map_err(|_| StreamError::ResponseChannelClosed)??))
+        let mut error_receiver = error_receiver.fuse();
+        let result = futures::future::poll_fn(move |cx| {
+            if let Poll::Ready(result) = receiver.poll_unpin(cx) {
+                 return Poll::Ready(Either::Left(result))
+            }
+            if let Poll::Ready(result) = error_receiver.poll_unpin(cx) {
+                return match result {
+                    Ok(error) => Poll::Ready(Either::Right(error)),
+                    Err(Canceled) => Poll::Pending
+                }
+            }
+            Poll::Pending
+        });
+        match result.await {
+            Either::Left(result) => Ok(Ok(result.map_err(|_| StreamError::ResponseChannelClosed)??)),
+            Either::Right(ConnClosed) => Err(StreamError::ConnectionClosed),
+        }
     }
 }
 
@@ -202,18 +233,24 @@ impl StreamTransport for StreamClient {
             });
         }
         let (sender, receiver) = mpsc::unbounded();
+        let (error_sender, error_receiver) = oneshot::channel();
         let request_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.stream_senders.lock().await.insert(request_id, sender);
         self.sender
             .lock()
             .await
-            .send(ConnectionMessage::Payload {
+            .send((ConnectionMessage::Payload {
                 request_id,
                 payload: request,
-            })
+            }, error_sender))
             .await
             .map_err(|_| StreamError::RequestChannelClosed)?;
-        Ok(Box::new(receiver))
+        match error_receiver.await {
+            Ok(ConnClosed) => {
+                Err(StreamError::ConnectionClosed)
+            }
+            Err(Canceled) => Ok(Box::new(receiver))
+        }
     }
 }
 
